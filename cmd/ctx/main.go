@@ -9,13 +9,13 @@ import (
 )
 
 func main() {
-	options, err := cli.Parse(os.Args[1:])
+	command, err := cli.Parse(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 
-	if err := app.Run(options, os.Stdout); err != nil {
+	if err := app.Run(command, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
