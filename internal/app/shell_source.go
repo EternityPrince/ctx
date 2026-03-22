@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -52,6 +53,30 @@ func renderSymbolSource(projectRoot, batPath string, symbol storage.SymbolMatch,
 	return output, nil
 }
 
+func renderFileSource(projectRoot, batPath, relPath string, color bool) (string, error) {
+	absPath := filepath.Join(projectRoot, filepath.FromSlash(relPath))
+	if batPath == "" {
+		return readFullFile(absPath)
+	}
+
+	args := []string{
+		"--paging=never",
+		"--style=numbers",
+	}
+	if color {
+		args = append(args, "--color=always")
+	} else {
+		args = append(args, "--color=never")
+	}
+	args = append(args, absPath)
+
+	out, err := exec.Command(batPath, args...).CombinedOutput()
+	if err != nil {
+		return readFullFile(absPath)
+	}
+	return strings.TrimRight(string(out), "\n"), nil
+}
+
 func renderWithBat(batPath, projectRoot, relPath string, start, end, focusLine int, color bool) (string, error) {
 	absPath := filepath.Join(projectRoot, filepath.FromSlash(relPath))
 	return renderWithBatAbsolute(batPath, absPath, start, end, focusLine, color)
@@ -76,4 +101,12 @@ func renderWithBatAbsolute(batPath, path string, start, end, focusLine int, colo
 		return "", fmt.Errorf("run bat: %w", err)
 	}
 	return strings.TrimRight(string(out), "\n"), nil
+}
+
+func readFullFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read file %s: %w", path, err)
+	}
+	return strings.TrimRight(string(data), "\n"), nil
 }

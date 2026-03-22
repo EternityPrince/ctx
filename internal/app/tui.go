@@ -12,7 +12,6 @@ import (
 
 	"github.com/vladimirkasterin/ctx/internal/cli"
 	"github.com/vladimirkasterin/ctx/internal/clipboard"
-	"github.com/vladimirkasterin/ctx/internal/indexer"
 	"github.com/vladimirkasterin/ctx/internal/project"
 	"github.com/vladimirkasterin/ctx/internal/storage"
 )
@@ -91,32 +90,31 @@ func runShell(command cli.Command, stdout io.Writer) error {
 		return runShellREPL(command, stdout)
 	}
 
-	info, store, scanned, previous, err := openPreparedProjectState(command)
+	state, err := openPreparedProjectState(command)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer state.Close()
 
-	changes := indexer.Diff(scanned, previous)
-	changedNow := len(changes.Added) + len(changes.Changed) + len(changes.Deleted)
-	status, err := store.Status(changedNow)
+	changedNow := projectService.ChangedNow(state)
+	status, err := state.Store.Status(changedNow)
 	if err != nil {
 		return err
 	}
 	if !status.HasSnapshot {
-		_, err := fmt.Fprintf(stdout, "No index snapshot for %s. Run `ctx index %s` first.\n", info.ModulePath, info.Root)
+		_, err := fmt.Fprintf(stdout, "No index snapshot for %s. Run `ctx index %s` first.\n", state.Info.ModulePath, state.Info.Root)
 		return err
 	}
 
-	report, err := store.LoadReportView(8)
+	report, err := state.Store.LoadReportView(8)
 	if err != nil {
 		return err
 	}
 
 	file := stdout.(*os.File)
 	model := &tuiModel{
-		info:         info,
-		store:        store,
+		info:         state.Info,
+		store:        state.Store,
 		stdout:       file,
 		palette:      newPalette(),
 		changedNow:   changedNow,

@@ -237,6 +237,18 @@ func (s *shellSession) renderWalk() error {
 }
 
 func (s *shellSession) showFullCurrentEntity() error {
+	if s.currentMode == "file" && s.currentFile != "" {
+		if err := s.beginScreen("Full File"); err != nil {
+			return err
+		}
+		source, err := renderFileSource(s.info.Root, s.batPath, s.currentFile, s.palette.enabled)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(s.stdout, "%s\n%s\n\n", s.palette.section("Full File"), source)
+		return err
+	}
+
 	if s.currentKey == "" {
 		return s.printShellError(fmt.Errorf("No current entity. Open or walk a symbol first."))
 	}

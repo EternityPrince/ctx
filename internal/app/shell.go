@@ -11,7 +11,6 @@ import (
 
 	"github.com/vladimirkasterin/ctx/internal/cli"
 	"github.com/vladimirkasterin/ctx/internal/clipboard"
-	"github.com/vladimirkasterin/ctx/internal/indexer"
 	"github.com/vladimirkasterin/ctx/internal/project"
 	"github.com/vladimirkasterin/ctx/internal/storage"
 )
@@ -55,26 +54,25 @@ type shellTarget struct {
 const shellListLimit = 12
 
 func runShellREPL(command cli.Command, stdout io.Writer) error {
-	info, store, scanned, previous, err := openPreparedProjectState(command)
+	state, err := openPreparedProjectState(command)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer state.Close()
 
-	changes := indexer.Diff(scanned, previous)
-	changedNow := len(changes.Added) + len(changes.Changed) + len(changes.Deleted)
-	status, err := store.Status(changedNow)
+	changedNow := projectService.ChangedNow(state)
+	status, err := state.Store.Status(changedNow)
 	if err != nil {
 		return err
 	}
 	if !status.HasSnapshot {
-		_, err := fmt.Fprintf(stdout, "No index snapshot for %s. Run `ctx index %s` first.\n", info.ModulePath, info.Root)
+		_, err := fmt.Fprintf(stdout, "No index snapshot for %s. Run `ctx index %s` first.\n", state.Info.ModulePath, state.Info.Root)
 		return err
 	}
 
 	session := &shellSession{
-		info:         info,
-		store:        store,
+		info:         state.Info,
+		store:        state.Store,
 		stdout:       stdout,
 		palette:      newPalette(),
 		changedNow:   changedNow,
@@ -384,7 +382,7 @@ func (s *shellSession) printHelp() error {
 	}
 	_, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  home | main                return to the main menu\n  tree [next|prev|page <n>]  show the project structure page by page\n  symbol <query> | s <query> open a symbol journey card\n  file [path|n]              travel through symbols in a file by path or tree number\n  walk [path|n|next|prev|open|full|exit]\n                             step through entities in the current file\n  menu | m                   show numbered next-step actions for current symbol\n  callers                    show direct callers and let you open them\n  callees                    show direct callees and let you open them\n  refs [in|out]              show references with use-site snippets\n  tests                      show related tests\n  related                    show sibling/nearby symbols\n  impact [query]             show impact summary for current or named symbol\n  source [n] | body [n]      show source/body for the current or listed target\n  source full [n] | full [n] show the full current or listed entity body\n  copy [n]                   copy the current or listed target context\n  report [project|entity|file]\n                             show a project, current symbol, or current file report\n  status                     snapshot status\n  open <n>                   open item from the last numbered list\n  back / forward             navigate symbol history\n  clear                      redraw the current screen cleanly\n  quit                       exit the shell\n\n%s\n  after a symbol card, type 1..N to open the suggested next step\n  after a list, type a number to open that item directly\n  after a tree screen, use file <n> or open <n> to jump by the shown file number\n  use tree next / tree prev / tree page <n> to inspect the whole tree without truncation\n  inside walk mode, use next / prev / full / open-current / leave\n  after a file journey, use source <n> to peek a body before opening it\n  use report with no args to get a report for the thing you are currently in\n\n",
+		"%s\n  home | main                return to the main menu\n  tree [next|prev|page <n>]  show the project structure page by page\n  symbol <query> | s <query> open a symbol journey card\n  file [path|n]              travel through symbols in a file by path or tree number\n  walk [path|n|next|prev|open|full|exit]\n                             step through entities in the current file\n  menu | m                   show numbered next-step actions for current symbol\n  callers                    show direct callers and let you open them\n  callees                    show direct callees and let you open them\n  refs [in|out]              show references with use-site snippets\n  tests                      show related tests\n  related                    show sibling/nearby symbols\n  impact [query]             show impact summary for current or named symbol\n  source [n] | body [n]      show source/body for the current or listed target\n  source full [n] | full [n] show the full current or listed entity body\n                             when you are on a file card, plain full prints the whole file\n  copy [n]                   copy the current or listed target context\n  report [project|entity|file]\n                             show a project, current symbol, or current file report\n  status                     snapshot status\n  open <n>                   open item from the last numbered list\n  back / forward             navigate symbol history\n  clear                      redraw the current screen cleanly\n  quit                       exit the shell\n\n%s\n  after a symbol card, type 1..N to open the suggested next step\n  after a list, type a number to open that item directly\n  after a tree screen, use file <n> or open <n> to jump by the shown file number\n  use tree next / tree prev / tree page <n> to inspect the whole tree without truncation\n  inside walk mode, use next / prev / full / open-current / leave\n  after a file journey, use source <n> to peek a body before opening it or full for the whole file\n  use report with no args to get a report for the thing you are currently in\n\n",
 		s.palette.section("Shell Help"),
 		s.palette.section("Number Flow"),
 	)

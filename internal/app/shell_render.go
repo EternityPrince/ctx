@@ -199,7 +199,7 @@ func (s *shellSession) renderFileJourney(filePath, focusSymbolKey string, symbol
 	}
 	if _, err := fmt.Fprintf(
 		s.stdout,
-		"\n%s\n  %s use %s to jump into a symbol\n  %s use %s to inspect the body without leaving the file screen\n  %s use %s to walk entity-by-entity through this file\n  %s use %s for the full current entity body\n  %s use %s for a ranked file report\n  %s use %s to copy the current symbol/file context\n  %s use %s or %s to move up a level\n\n",
+		"\n%s\n  %s use %s to jump into a symbol\n  %s use %s to inspect the body without leaving the file screen\n  %s use %s to walk entity-by-entity through this file\n  %s use %s for the full current entity body or plain %s for the whole file\n  %s use %s for a ranked file report\n  %s use %s to copy the current symbol/file context\n  %s use %s or %s to move up a level\n\n",
 		s.palette.section("Workflow"),
 		s.palette.label("Next:"),
 		s.palette.accent("open <n>"),
@@ -209,6 +209,7 @@ func (s *shellSession) renderFileJourney(filePath, focusSymbolKey string, symbol
 		s.palette.accent("walk"),
 		s.palette.label("Deep body:"),
 		s.palette.accent("full <n>"),
+		s.palette.accent("full"),
 		s.palette.label("Report:"),
 		s.palette.accent("report"),
 		s.palette.label("Copy:"),
@@ -349,7 +350,7 @@ func (s *shellSession) renderFileJourneyOverview(filePath, focusSymbolKey string
 	}
 	if err := s.writeFileJourneyRow(
 		fmt.Sprintf("%s %s", s.palette.label("Focus:"), focus),
-		fmt.Sprintf("%s %s / %s / %s", s.palette.label("Explore:"), s.palette.accent("walk"), s.palette.accent("source <n>"), s.palette.accent("full <n>")),
+		fmt.Sprintf("%s %s / %s / %s / %s", s.palette.label("Explore:"), s.palette.accent("walk"), s.palette.accent("source <n>"), s.palette.accent("full <n>"), s.palette.accent("full")),
 	); err != nil {
 		return err
 	}

@@ -161,3 +161,31 @@ func TestParseProjectsRemove(t *testing.T) {
 		t.Fatalf("unexpected project arg: %q", command.ProjectArg)
 	}
 }
+
+func TestParseSnapshotsCommand(t *testing.T) {
+	command, err := Parse([]string{"snapshots", ".", "-ai"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	if command.Name != "snapshots" {
+		t.Fatalf("expected snapshots command, got %q", command.Name)
+	}
+	if command.OutputMode != OutputAI {
+		t.Fatalf("expected ai output mode, got %q", command.OutputMode)
+	}
+}
+
+func TestParseSnapshotCommand(t *testing.T) {
+	command, err := Parse([]string{"snapshot", "7", "--root", "."})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	if command.Name != "snapshot" {
+		t.Fatalf("expected snapshot command, got %q", command.Name)
+	}
+	if command.SnapshotID != 7 {
+		t.Fatalf("expected snapshot id 7, got %d", command.SnapshotID)
+	}
+}

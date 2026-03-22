@@ -129,6 +129,8 @@ From there you can move naturally:
 ctx update .
 ctx diff --from 4 --to 5
 ctx status .
+ctx snapshots
+ctx snapshot 5
 ```
 
 ## Installation
@@ -259,6 +261,25 @@ Compare snapshots.
 
 ```bash
 ctx diff --from 4 --to 5
+```
+
+### `ctx snapshots`
+
+List stored snapshots for the current project.
+
+```bash
+ctx snapshots
+ctx snapshots . -ai
+```
+
+### `ctx snapshot`
+
+Inspect one snapshot, or the current snapshot if no id is provided.
+
+```bash
+ctx snapshot
+ctx snapshot 5
+ctx snapshot 5 --root .
 ```
 
 ### `ctx shell`

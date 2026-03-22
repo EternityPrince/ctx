@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/vladimirkasterin/ctx/internal/config"
@@ -22,6 +23,7 @@ type Command struct {
 	ProjectsVerb string
 	FromSnapshot int64
 	ToSnapshot   int64
+	SnapshotID   int64
 	Report       config.Options
 }
 
@@ -58,6 +60,10 @@ func Parse(args []string) (Command, error) {
 		return parseImpact(args[1:])
 	case "diff":
 		return parseDiff(args[1:])
+	case "snapshots":
+		return parseSnapshots(args[1:])
+	case "snapshot":
+		return parseSnapshot(args[1:])
 	case "projects":
 		return parseProjects(args[1:])
 	case "report":
@@ -400,6 +406,106 @@ func parseDiff(args []string) (Command, error) {
 	}, nil
 }
 
+func parseSnapshots(args []string) (Command, error) {
+	root := "."
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		root = args[0]
+		args = args[1:]
+	}
+
+	fs := flag.NewFlagSet("snapshots", flag.ContinueOnError)
+	fs.SetOutput(ioDiscard{})
+
+	var ai bool
+	var human bool
+	bindOutputModeFlags(fs, &ai, &human)
+	fs.Usage = func() {}
+
+	if err := fs.Parse(args); err != nil {
+		return Command{}, usageError(err)
+	}
+
+	remaining := fs.Args()
+	if len(remaining) > 1 {
+		return Command{}, usageError(errors.New("only one path can be provided"))
+	}
+	if len(remaining) == 1 {
+		root = remaining[0]
+	}
+
+	mode, err := resolveOutputMode(ai, human)
+	if err != nil {
+		return Command{}, usageError(err)
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return Command{}, fmt.Errorf("resolve root path: %w", err)
+	}
+
+	return Command{
+		Name:       "snapshots",
+		Root:       absRoot,
+		OutputMode: mode,
+	}, nil
+}
+
+func parseSnapshot(args []string) (Command, error) {
+	var snapshotID int64
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		value, err := strconv.ParseInt(args[0], 10, 64)
+		if err != nil {
+			return Command{}, usageError(fmt.Errorf("snapshot id must be a number: %w", err))
+		}
+		snapshotID = value
+		args = args[1:]
+	}
+
+	fs := flag.NewFlagSet("snapshot", flag.ContinueOnError)
+	fs.SetOutput(ioDiscard{})
+
+	var root string
+	var ai bool
+	var human bool
+	fs.StringVar(&root, "root", ".", "project root or any path inside the project")
+	bindOutputModeFlags(fs, &ai, &human)
+	fs.Usage = func() {}
+
+	if err := fs.Parse(args); err != nil {
+		return Command{}, usageError(err)
+	}
+
+	remaining := fs.Args()
+	if snapshotID == 0 && len(remaining) > 0 {
+		value, err := strconv.ParseInt(remaining[0], 10, 64)
+		if err != nil {
+			return Command{}, usageError(fmt.Errorf("snapshot id must be a number: %w", err))
+		}
+		snapshotID = value
+		remaining = remaining[1:]
+	}
+	if len(remaining) != 0 {
+		return Command{}, usageError(errors.New("snapshot accepts at most one snapshot id"))
+	}
+
+	mode, err := resolveOutputMode(ai, human)
+	if err != nil {
+		return Command{}, usageError(err)
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return Command{}, fmt.Errorf("resolve root path: %w", err)
+	}
+
+	return Command{
+		Name:       "snapshot",
+		Root:       absRoot,
+		SnapshotID: snapshotID,
+		OutputMode: mode,
+	}, nil
+}
+
 func parseProjects(args []string) (Command, error) {
 	if len(args) == 0 {
 		return Command{Name: "projects", ProjectsVerb: "list"}, nil
@@ -507,6 +613,8 @@ Usage:
   ctx symbol <query> [--root path] [-h|-human|-a|-ai]
   ctx impact <query> [--root path] [--depth N] [-h|-human|-a|-ai]
   ctx diff [--root path] [--from N] [--to N]
+  ctx snapshots [path] [-h|-human|-a|-ai]
+  ctx snapshot [id] [--root path] [-h|-human|-a|-ai]
   ctx shell [query] [--root path]
   ctx projects [list|rm|prune]
 
@@ -518,6 +626,8 @@ Core Commands:
   symbol     show declaration, signature, context, refs, callers, callees, tests, impact
   impact     show what may be affected if a symbol changes
   diff       compare snapshots and see what changed
+  snapshots  list all stored snapshots for the project
+  snapshot   inspect one snapshot and its stored inventory
   shell      explore the project in a human-oriented flow shell
   projects   inspect and clean up locally indexed projects
   dump       legacy full file/context dump for clipboard or external tooling
@@ -583,7 +693,7 @@ func normalizeExtensions(raw string) []string {
 
 func shouldTreatAsLegacyReport(firstArg string) bool {
 	switch firstArg {
-	case "index", "update", "shell", "status", "symbol", "impact", "diff", "projects", "report", "dump", "help", "-h", "--help":
+	case "index", "update", "shell", "status", "symbol", "impact", "diff", "snapshots", "snapshot", "projects", "report", "dump", "help", "-h", "--help":
 		return false
 	}
 	if strings.HasPrefix(firstArg, "-") {

@@ -28,6 +28,7 @@ type shellTreeLine struct {
 	Text      string
 	Path      string
 	IsDir     bool
+	DirLines  int
 	Active    bool
 	IsTest    bool
 	FileIndex int
@@ -112,7 +113,8 @@ func (s *shellSession) showTreePage(page int) error {
 	if err != nil {
 		return err
 	}
-	allLines := buildShellTreeLines(treeRoot, scannedFiles, fileSummaries, s.currentFile)
+	dirLines := directoryLineTotals(scannedFiles)
+	allLines := buildShellTreeLines(treeRoot, scannedFiles, fileSummaries, dirLines, s.currentFile)
 	totalPages := max(1, (len(allLines)+shellTreePageSize-1)/shellTreePageSize)
 	if page < 0 {
 		page = 0
@@ -153,15 +155,17 @@ func (s *shellSession) showTreePage(page int) error {
 	}
 	if _, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  %s dirs=%d  files=%d  go=%d  test_files=%d  lines=%d  size=%s\n  %s indexed_files=%d  funcs=%d  methods=%d  structs=%d  tests=%d  test-link=%s\n  %s files are page-numbered, %s rows are test files, and the right column is copy-friendly\n\n",
+		"%s\n  %s %d  %s %s\n  %s dirs=%d  files=%d  go=%d  test_files=%d\n  %s indexed_files=%d  funcs=%d  methods=%d  structs=%d  tests=%d  test-link=%s\n  %s files are page-numbered, %s rows are test files, and the right column is copy-friendly\n\n",
 		s.palette.section("Project Structure"),
+		s.palette.label("Total lines:"),
+		aggregate.TotalLines,
+		s.palette.label("Footprint:"),
+		shellHumanSize(aggregate.TotalBytes),
 		s.palette.label("Disk view:"),
 		len(directories),
 		aggregate.TotalFiles,
 		aggregate.GoFiles,
 		aggregate.TestFiles,
-		aggregate.TotalLines,
-		shellHumanSize(aggregate.TotalBytes),
 		s.palette.label("Code map:"),
 		aggregate.IndexedFiles,
 		aggregate.FuncCount,
@@ -197,7 +201,11 @@ func (s *shellSession) showTreePage(page int) error {
 		}
 
 		if line.IsDir {
-			if _, err := fmt.Fprintf(s.stdout, "%s %s\n", prefix, s.palette.section(line.Text)); err != nil {
+			dirText := s.palette.section(line.Text)
+			if line.DirLines > 0 {
+				dirText = fmt.Sprintf("%s %s", dirText, s.palette.muted(fmt.Sprintf("(%dL)", line.DirLines)))
+			}
+			if _, err := fmt.Fprintf(s.stdout, "%s %s\n", prefix, dirText); err != nil {
 				return err
 			}
 			continue
@@ -347,25 +355,26 @@ func scanProjectTree(root string) ([]string, []shellScannedFile, error) {
 	return directories, files, nil
 }
 
-func buildShellTreeLines(root *projecttree.Node, scannedFiles []shellScannedFile, summaries map[string]storage.FileSummary, currentFile string) []shellTreeLine {
+func buildShellTreeLines(root *projecttree.Node, scannedFiles []shellScannedFile, summaries map[string]storage.FileSummary, dirLines map[string]int, currentFile string) []shellTreeLine {
 	fileByPath := make(map[string]shellScannedFile, len(scannedFiles))
 	for _, file := range scannedFiles {
 		fileByPath[file.Path] = file
 	}
 
 	lines := []shellTreeLine{{
-		Text:  root.Name + "/",
-		Path:  "",
-		IsDir: true,
+		Text:     root.Name + "/",
+		Path:     "",
+		IsDir:    true,
+		DirLines: dirLines[""],
 	}}
 	fileIndex := 0
 	for idx, child := range root.Children {
-		appendShellTreeNode(&lines, child, "", idx == len(root.Children)-1, child.Name, currentFile, fileByPath, summaries, &fileIndex)
+		appendShellTreeNode(&lines, child, "", idx == len(root.Children)-1, child.Name, currentFile, fileByPath, summaries, dirLines, &fileIndex)
 	}
 	return lines
 }
 
-func appendShellTreeNode(lines *[]shellTreeLine, node *projecttree.Node, prefix string, last bool, relPath, currentFile string, fileByPath map[string]shellScannedFile, summaries map[string]storage.FileSummary, fileIndex *int) {
+func appendShellTreeNode(lines *[]shellTreeLine, node *projecttree.Node, prefix string, last bool, relPath, currentFile string, fileByPath map[string]shellScannedFile, summaries map[string]storage.FileSummary, dirLines map[string]int, fileIndex *int) {
 	branch := "|-- "
 	nextPrefix := prefix + "|   "
 	if last {
@@ -374,10 +383,11 @@ func appendShellTreeNode(lines *[]shellTreeLine, node *projecttree.Node, prefix 
 	}
 
 	line := shellTreeLine{
-		Text:   prefix + branch + node.Name,
-		Path:   filepath.ToSlash(relPath),
-		IsDir:  node.IsDir,
-		Active: filepath.ToSlash(relPath) == filepath.ToSlash(currentFile),
+		Text:     prefix + branch + node.Name,
+		Path:     filepath.ToSlash(relPath),
+		IsDir:    node.IsDir,
+		DirLines: dirLines[filepath.ToSlash(relPath)],
+		Active:   filepath.ToSlash(relPath) == filepath.ToSlash(currentFile),
 	}
 	if node.IsDir {
 		line.Text += "/"
@@ -392,8 +402,30 @@ func appendShellTreeNode(lines *[]shellTreeLine, node *projecttree.Node, prefix 
 
 	for idx, child := range node.Children {
 		childPath := filepath.ToSlash(filepath.Join(relPath, child.Name))
-		appendShellTreeNode(lines, child, nextPrefix, idx == len(node.Children)-1, childPath, currentFile, fileByPath, summaries, fileIndex)
+		appendShellTreeNode(lines, child, nextPrefix, idx == len(node.Children)-1, childPath, currentFile, fileByPath, summaries, dirLines, fileIndex)
 	}
+}
+
+func directoryLineTotals(scannedFiles []shellScannedFile) map[string]int {
+	totals := map[string]int{"": 0}
+	for _, file := range scannedFiles {
+		dir := filepath.ToSlash(filepath.Dir(file.Path))
+		if dir == "." {
+			dir = ""
+		}
+		for {
+			totals[dir] += file.LineCount
+			if dir == "" {
+				break
+			}
+			parent := filepath.ToSlash(filepath.Dir(dir))
+			if parent == "." {
+				parent = ""
+			}
+			dir = parent
+		}
+	}
+	return totals
 }
 
 func aggregateTree(scannedFiles []shellScannedFile, summaries map[string]storage.FileSummary) treeAggregate {
