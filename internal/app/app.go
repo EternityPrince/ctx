@@ -75,7 +75,7 @@ func runLegacyReport(command cli.Command, stdout io.Writer) error {
 }
 
 func runProjectReport(command cli.Command, stdout io.Writer) error {
-	info, store, scanned, previous, err := openProjectState(command.Root)
+	info, store, scanned, previous, err := openPreparedProjectState(command)
 	if err != nil {
 		return err
 	}
@@ -181,7 +181,7 @@ func runIndexLike(command cli.Command, stdout io.Writer, forceFull bool) error {
 }
 
 func runStatus(command cli.Command, stdout io.Writer) error {
-	info, store, scanned, previous, err := openProjectState(command.Root)
+	info, store, scanned, previous, err := openPreparedProjectState(command)
 	if err != nil {
 		return err
 	}
@@ -288,7 +288,7 @@ func runProjects(command cli.Command, stdout io.Writer) error {
 }
 
 func runSymbol(command cli.Command, stdout io.Writer) error {
-	info, store, _, _, err := openProjectState(command.Root)
+	info, store, _, _, err := openPreparedProjectState(command)
 	if err != nil {
 		return err
 	}
@@ -315,7 +315,7 @@ func runSymbol(command cli.Command, stdout io.Writer) error {
 }
 
 func runImpact(command cli.Command, stdout io.Writer) error {
-	info, store, _, _, err := openProjectState(command.Root)
+	info, store, _, _, err := openPreparedProjectState(command)
 	if err != nil {
 		return err
 	}
@@ -342,7 +342,7 @@ func runImpact(command cli.Command, stdout io.Writer) error {
 }
 
 func runDiff(command cli.Command, stdout io.Writer) error {
-	_, store, _, _, err := openProjectState(command.Root)
+	_, store, _, _, err := openPreparedProjectState(command)
 	if err != nil {
 		return err
 	}
@@ -413,6 +413,83 @@ func openProjectState(path string) (project.Info, *storage.Store, []indexer.Scan
 	}
 
 	return info, store, scanned, previous, nil
+}
+
+func openPreparedProjectState(command cli.Command) (project.Info, *storage.Store, []indexer.ScanFile, map[string]indexer.PreviousFile, error) {
+	info, store, scanned, previous, err := openProjectState(command.Root)
+	if err != nil {
+		return project.Info{}, nil, nil, nil, err
+	}
+
+	refreshed, err := maybeAutoRefreshProject(command, info, store, scanned, previous)
+	if err != nil {
+		store.Close()
+		return project.Info{}, nil, nil, nil, err
+	}
+	if refreshed {
+		previous, err = store.CurrentFiles()
+		if err != nil {
+			store.Close()
+			return project.Info{}, nil, nil, nil, err
+		}
+	}
+	return info, store, scanned, previous, nil
+}
+
+func maybeAutoRefreshProject(command cli.Command, info project.Info, store *storage.Store, scanned []indexer.ScanFile, previous map[string]indexer.PreviousFile) (bool, error) {
+	if !shouldAutoRefresh(command.Name) {
+		return false, nil
+	}
+
+	changes, impacted, fullReindex := indexer.DetectImpactedPackages(info.Root, info.ModulePath, scanned, previous)
+	if len(changes.Added) == 0 && len(changes.Changed) == 0 && len(changes.Deleted) == 0 {
+		return false, nil
+	}
+
+	current, hasCurrent, err := store.CurrentSnapshot()
+	if err != nil {
+		return false, err
+	}
+	if !hasCurrent {
+		return false, nil
+	}
+
+	if !fullReindex && len(impacted) > 0 {
+		reverse, err := store.ReverseDependencies(current.ID, impacted)
+		if err != nil {
+			return false, err
+		}
+		impacted = mergeStrings(impacted, reverse)
+	}
+
+	patterns := impacted
+	if fullReindex {
+		patterns = nil
+	}
+
+	scanMap := make(map[string]indexer.ScanFile, len(scanned))
+	for _, file := range scanned {
+		scanMap[file.RelPath] = file
+	}
+
+	result, err := indexer.Analyze(info.Root, info.ModulePath, info.GoVersion, scanMap, patterns)
+	if err != nil {
+		return false, fmt.Errorf("auto-refresh index: analyze project: %w", err)
+	}
+
+	if _, err := store.CommitSnapshot("update", "auto-refresh before "+command.Name, scanned, result, changes, fullReindex); err != nil {
+		return false, fmt.Errorf("auto-refresh index: %w", err)
+	}
+	return true, nil
+}
+
+func shouldAutoRefresh(commandName string) bool {
+	switch commandName {
+	case "report", "shell", "status", "symbol", "impact", "diff":
+		return true
+	default:
+		return false
+	}
 }
 
 func printStringList(stdout io.Writer, title string, values []string) error {

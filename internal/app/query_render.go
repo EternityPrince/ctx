@@ -186,7 +186,7 @@ func renderHumanSymbolView(stdout io.Writer, projectRoot, modulePath string, vie
 		return err
 	}
 
-	if err := renderHumanDeclaration(stdout, p, view.Symbol); err != nil {
+	if err := renderHumanDeclaration(stdout, p, projectRoot, view.Symbol); err != nil {
 		return err
 	}
 	if err := renderHumanSource(stdout, p, projectRoot, view.Symbol.FilePath, view.Symbol.Line); err != nil {
@@ -210,7 +210,7 @@ func renderHumanSymbolView(stdout io.Writer, projectRoot, modulePath string, vie
 	if err := renderHumanTests(stdout, p, projectRoot, "Related Tests", view.Tests, 8); err != nil {
 		return err
 	}
-	if err := renderHumanSiblingSymbols(stdout, p, modulePath, "Related Symbols", view.Siblings, 8); err != nil {
+	if err := renderHumanSiblingSymbols(stdout, p, projectRoot, modulePath, "Related Symbols", view.Siblings, 8); err != nil {
 		return err
 	}
 
@@ -301,7 +301,7 @@ func renderHumanImpactView(stdout io.Writer, projectRoot, modulePath string, vie
 		return err
 	}
 
-	if err := renderHumanDeclaration(stdout, p, view.Target); err != nil {
+	if err := renderHumanDeclaration(stdout, p, projectRoot, view.Target); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(
@@ -328,7 +328,7 @@ func renderHumanImpactView(stdout io.Writer, projectRoot, modulePath string, vie
 	if err := renderHumanRelatedSymbols(stdout, p, projectRoot, modulePath, "Direct Callers", view.DirectCallers, 8, true); err != nil {
 		return err
 	}
-	if err := renderHumanImpactNodes(stdout, p, modulePath, fmt.Sprintf("Transitive Callers (depth<=%d)", depth), view.TransitiveCallers, 10); err != nil {
+	if err := renderHumanImpactNodes(stdout, p, projectRoot, modulePath, fmt.Sprintf("Transitive Callers (depth<=%d)", depth), view.TransitiveCallers, 10); err != nil {
 		return err
 	}
 	if err := renderHumanStringList(stdout, p, "Caller Packages", shortenValues(modulePath, view.CallerPackages), 12); err != nil {
@@ -435,20 +435,19 @@ func renderHumanRankedSymbols(stdout io.Writer, p palette, modulePath, title str
 	return err
 }
 
-func renderHumanDeclaration(stdout io.Writer, p palette, symbol storage.SymbolMatch) error {
+func renderHumanDeclaration(stdout io.Writer, p palette, projectRoot string, symbol storage.SymbolMatch) error {
 	if _, err := fmt.Fprintf(stdout, "%s\n", p.section("Declaration")); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(
 		stdout,
-		"  %s %s\n  %s %s\n  %s %s:%d\n",
+		"  %s %s\n  %s %s\n  %s %s\n",
 		p.label("Signature:"),
 		styleHumanSignature(p, displaySignature(symbol)),
 		p.label("Package:"),
 		symbol.PackageImportPath,
 		p.label("File:"),
-		symbol.FilePath,
-		symbol.Line,
+		symbolRangeDisplay(projectRoot, symbol),
 	); err != nil {
 		return err
 	}
@@ -526,7 +525,7 @@ func renderHumanRelatedSymbols(stdout io.Writer, p palette, projectRoot, moduleP
 		if _, err := fmt.Fprintf(stdout, "    %s\n", styleHumanSignature(p, displaySignature(value.Symbol))); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(stdout, "    %s %s:%d\n", p.label("declared:"), value.Symbol.FilePath, value.Symbol.Line); err != nil {
+		if _, err := fmt.Fprintf(stdout, "    %s %s\n", p.label("declared:"), symbolRangeDisplay(projectRoot, value.Symbol)); err != nil {
 			return err
 		}
 		if showUseSite {
@@ -565,7 +564,7 @@ func renderHumanReferences(stdout io.Writer, p palette, projectRoot, modulePath,
 		if _, err := fmt.Fprintf(stdout, "    %s\n", styleHumanSignature(p, displaySignature(value.Symbol))); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(stdout, "    %s %s:%d\n", p.label("declared:"), value.Symbol.FilePath, value.Symbol.Line); err != nil {
+		if _, err := fmt.Fprintf(stdout, "    %s %s\n", p.label("declared:"), symbolRangeDisplay(projectRoot, value.Symbol)); err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintf(stdout, "    %s %s:%d [%s]\n", p.label("ref:"), value.UseFilePath, value.UseLine, value.Kind); err != nil {
@@ -603,7 +602,7 @@ func renderHumanTests(stdout io.Writer, p palette, projectRoot, title string, te
 	return renderMoreLine(stdout, len(tests), limit)
 }
 
-func renderHumanSiblingSymbols(stdout io.Writer, p palette, modulePath, title string, symbols []storage.SymbolMatch, limit int) error {
+func renderHumanSiblingSymbols(stdout io.Writer, p palette, projectRoot, modulePath, title string, symbols []storage.SymbolMatch, limit int) error {
 	if _, err := fmt.Fprintf(stdout, "%s (%d)\n", p.section(title), len(symbols)); err != nil {
 		return err
 	}
@@ -617,14 +616,14 @@ func renderHumanSiblingSymbols(stdout io.Writer, p palette, modulePath, title st
 		if _, err := fmt.Fprintf(stdout, "    %s\n", styleHumanSignature(p, displaySignature(symbol))); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(stdout, "    %s:%d\n", symbol.FilePath, symbol.Line); err != nil {
+		if _, err := fmt.Fprintf(stdout, "    %s\n", symbolRangeDisplay(projectRoot, symbol)); err != nil {
 			return err
 		}
 	}
 	return renderMoreLine(stdout, len(symbols), limit)
 }
 
-func renderHumanImpactNodes(stdout io.Writer, p palette, modulePath, title string, values []storage.ImpactNode, limit int) error {
+func renderHumanImpactNodes(stdout io.Writer, p palette, projectRoot, modulePath, title string, values []storage.ImpactNode, limit int) error {
 	if _, err := fmt.Fprintf(stdout, "%s (%d)\n", p.section(title), len(values)); err != nil {
 		return err
 	}
@@ -638,7 +637,7 @@ func renderHumanImpactNodes(stdout io.Writer, p palette, modulePath, title strin
 		if _, err := fmt.Fprintf(stdout, "    %s\n", styleHumanSignature(p, displaySignature(value.Symbol))); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(stdout, "    %s %s:%d  %s %d\n", p.label("declared:"), value.Symbol.FilePath, value.Symbol.Line, p.label("depth:"), value.Depth); err != nil {
+		if _, err := fmt.Fprintf(stdout, "    %s %s  %s %d\n", p.label("declared:"), symbolRangeDisplay(projectRoot, value.Symbol), p.label("depth:"), value.Depth); err != nil {
 			return err
 		}
 	}

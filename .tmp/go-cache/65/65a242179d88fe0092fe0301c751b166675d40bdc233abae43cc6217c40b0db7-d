@@ -1,0 +1,10 @@
+./app.go
+./query_render.go
+./shell.go
+./shell_render.go
+./shell_report.go
+./shell_source.go
+./shell_tree.go
+./source_block.go
+./tui.go
+./tui_terminal.go

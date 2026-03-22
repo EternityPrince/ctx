@@ -26,6 +26,21 @@ type ReportView struct {
 	TopTypes     []RankedSymbol
 }
 
+type FileSummary struct {
+	FilePath              string
+	PackageImportPath     string
+	SizeBytes             int64
+	IsTest                bool
+	SymbolCount           int
+	FuncCount             int
+	MethodCount           int
+	StructCount           int
+	DeclaredTestCount     int
+	RelatedTestCount      int
+	RelevantSymbolCount   int
+	TestLinkedSymbolCount int
+}
+
 func (s *Store) LoadReportView(limit int) (ReportView, error) {
 	if limit <= 0 {
 		limit = 8
@@ -50,6 +65,77 @@ func (s *Store) LoadReportView(limit int) (ReportView, error) {
 		return ReportView{}, err
 	}
 	return view, nil
+}
+
+func (s *Store) LoadFileSummaries() (map[string]FileSummary, error) {
+	current, ok, err := s.CurrentSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("no snapshots available")
+	}
+
+	rows, err := s.db.Query(`
+		SELECT
+			f.rel_path,
+			f.package_import_path,
+			f.size_bytes,
+			f.is_test,
+			COUNT(DISTINCT s.symbol_key),
+			COUNT(DISTINCT CASE WHEN s.kind = 'func' AND s.is_test = 0 THEN s.symbol_key END),
+			COUNT(DISTINCT CASE WHEN s.kind = 'method' AND s.is_test = 0 THEN s.symbol_key END),
+			COUNT(DISTINCT CASE WHEN s.kind = 'struct' AND s.is_test = 0 THEN s.symbol_key END),
+			COUNT(DISTINCT tests.test_key),
+			COUNT(DISTINCT tl.test_key),
+			COUNT(DISTINCT CASE WHEN s.kind IN ('func', 'method', 'struct', 'interface', 'type', 'alias') AND s.is_test = 0 THEN s.symbol_key END),
+			COUNT(DISTINCT CASE WHEN tl.test_key IS NOT NULL AND s.kind IN ('func', 'method', 'struct', 'interface', 'type', 'alias') AND s.is_test = 0 THEN s.symbol_key END)
+		FROM files f
+		LEFT JOIN symbols s
+			ON s.snapshot_id = f.snapshot_id
+			AND s.file_path = f.rel_path
+		LEFT JOIN tests
+			ON tests.snapshot_id = f.snapshot_id
+			AND tests.file_path = f.rel_path
+		LEFT JOIN test_links tl
+			ON tl.snapshot_id = f.snapshot_id
+			AND tl.symbol_key = s.symbol_key
+		WHERE f.snapshot_id = ?
+		GROUP BY f.rel_path, f.package_import_path, f.size_bytes, f.is_test
+		ORDER BY f.rel_path
+	`, current.ID)
+	if err != nil {
+		return nil, fmt.Errorf("query file summaries: %w", err)
+	}
+	defer rows.Close()
+
+	summaries := make(map[string]FileSummary)
+	for rows.Next() {
+		var item FileSummary
+		var isTest int
+		if err := rows.Scan(
+			&item.FilePath,
+			&item.PackageImportPath,
+			&item.SizeBytes,
+			&isTest,
+			&item.SymbolCount,
+			&item.FuncCount,
+			&item.MethodCount,
+			&item.StructCount,
+			&item.DeclaredTestCount,
+			&item.RelatedTestCount,
+			&item.RelevantSymbolCount,
+			&item.TestLinkedSymbolCount,
+		); err != nil {
+			return nil, fmt.Errorf("scan file summary: %w", err)
+		}
+		item.IsTest = isTest == 1
+		summaries[item.FilePath] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate file summaries: %w", err)
+	}
+	return summaries, nil
 }
 
 func (s *Store) loadTopPackages(snapshotID int64, limit int) ([]RankedPackage, error) {

@@ -27,9 +27,20 @@ type shellSession struct {
 	currentQName string
 	currentMode  string
 	currentFile  string
+	walkActive   bool
+	walkSymbols  []storage.SymbolMatch
+	walkIndex    int
+	treePage     int
 	history      []string
 	historyIndex int
+	trail        []shellTrailEntry
+	trailIndex   int
 	lastTargets  []shellTarget
+	treeTargets  []shellTarget
+}
+
+type shellTrailEntry struct {
+	Label string
 }
 
 type shellTarget struct {
@@ -44,7 +55,7 @@ type shellTarget struct {
 const shellListLimit = 12
 
 func runShellREPL(command cli.Command, stdout io.Writer) error {
-	info, store, scanned, previous, err := openProjectState(command.Root)
+	info, store, scanned, previous, err := openPreparedProjectState(command)
 	if err != nil {
 		return err
 	}
@@ -69,6 +80,7 @@ func runShellREPL(command cli.Command, stdout io.Writer) error {
 		changedNow:   changedNow,
 		batPath:      detectBatPath(),
 		historyIndex: -1,
+		trailIndex:   -1,
 	}
 
 	return session.run(command.Query)
@@ -123,10 +135,25 @@ func (s *shellSession) run(initialQuery string) error {
 }
 
 func (s *shellSession) prompt() string {
+	switch s.currentMode {
+	case "landing":
+		return "ctx:home> "
+	case "tree":
+		return "ctx:tree> "
+	case "report":
+		return "ctx:report> "
+	case "status":
+		return "ctx:status> "
+	case "walk":
+		if s.walkActive && len(s.walkSymbols) > 0 && s.walkIndex >= 0 && s.walkIndex < len(s.walkSymbols) {
+			return fmt.Sprintf("ctx:walk:%d/%d> ", s.walkIndex+1, len(s.walkSymbols))
+		}
+		return "ctx:walk> "
+	}
 	if s.currentMode == "file" && s.currentFile != "" {
 		return fmt.Sprintf("ctx:file:%s> ", shortenQName(s.info.ModulePath, s.currentFile))
 	}
-	if s.currentQName != "" {
+	if s.currentMode == "symbol" && s.currentQName != "" {
 		return fmt.Sprintf("ctx:%s> ", shortenQName(s.info.ModulePath, s.currentQName))
 	}
 	return "ctx> "
@@ -157,7 +184,26 @@ func (s *shellSession) beginScreen(title string) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(s.stdout, "%s symbol <name>, file [path], callers, callees, refs, tests, related, impact, source, copy, back, forward, report, status, quit\n\n", s.palette.label("Flow:"))
+	if _, err := fmt.Fprintf(
+		s.stdout,
+		"%s home, tree [next|prev|page <n>], symbol <name>, file [path|n], walk [path|n|next|prev], callers, callees, refs, tests, related, impact, source, full, copy\n",
+		s.palette.label("Flow:"),
+	); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(
+		s.stdout,
+		"%s report [project|entity|file], open <n>, back, forward, clear, quit\n%s\n\n",
+		s.palette.label("Control:"),
+		s.palette.rule(""),
+	)
+	if err != nil {
+		return err
+	}
+	s.rememberTrail(title)
+	if _, err := fmt.Fprintf(s.stdout, "%s %s\n%s\n\n", s.palette.label("Trail:"), s.renderTrail(6), s.palette.rule("")); err != nil {
+		return err
+	}
 	return err
 }
 
@@ -165,14 +211,13 @@ func (s *shellSession) writeCurrentSymbolSummary(view storage.SymbolView) error 
 	impact := impactLabel(len(view.Callers), len(view.ReferencesIn), len(view.Tests), len(view.Package.ReverseDeps))
 	_, err := fmt.Fprintf(
 		s.stdout,
-		"%s %s %s\n%s\n%s %s:%d\n\n",
+		"%s %s %s\n%s\n%s %s\n\n",
 		s.palette.kindBadge(view.Symbol.Kind),
 		s.palette.accent(shortenQName(s.info.ModulePath, view.Symbol.QName)),
 		s.palette.badge(impact),
 		styleHumanSignature(s.palette, displaySignature(view.Symbol)),
 		s.palette.label("Declared:"),
-		view.Symbol.FilePath,
-		view.Symbol.Line,
+		symbolRangeDisplay(s.info.Root, view.Symbol),
 	)
 	return err
 }
@@ -196,7 +241,15 @@ func (s *shellSession) handleWithStop(line string) (bool, error) {
 		return false, s.printHelp()
 	case "quit", "exit", "q":
 		return true, nil
+	case "home", "main":
+		s.resetToHome()
+		return false, s.showLanding()
+	case "tree":
+		return false, s.showTreeCommand(args)
 	case "clear":
+		if s.walkActive {
+			return false, s.showWalk(nil)
+		}
 		if s.currentMode == "file" && s.currentFile != "" {
 			return false, s.showFileJourney(s.currentFile)
 		}
@@ -234,8 +287,20 @@ func (s *shellSession) handleWithStop(line string) (bool, error) {
 	case "related", "siblings":
 		return false, s.listRelated()
 	case "source", "src", "body":
+		if len(args) > 0 && strings.EqualFold(args[0], "full") {
+			if len(args) == 1 {
+				return false, s.showFullCurrentEntity()
+			}
+			if len(args) == 2 {
+				return false, s.showFullTarget(args[1])
+			}
+			return false, s.printShellError(fmt.Errorf("Usage: source [n] | source full [n]"))
+		}
 		if len(args) == 1 {
 			return false, s.showSourceTarget(args[0])
+		}
+		if len(args) > 1 {
+			return false, s.printShellError(fmt.Errorf("Usage: source [n] | source full [n]"))
 		}
 		return false, s.showSource()
 	case "file", "files":
@@ -244,12 +309,48 @@ func (s *shellSession) handleWithStop(line string) (bool, error) {
 			query = strings.Join(args, " ")
 		}
 		return false, s.showFileJourney(query)
+	case "walk":
+		return false, s.showWalk(args)
 	case "copy", "y":
 		arg := ""
 		if len(args) > 0 {
 			arg = args[0]
 		}
 		return false, s.copyCurrent(arg)
+	case "next":
+		if s.walkActive {
+			return false, s.walkMove(1)
+		}
+		if s.currentMode == "tree" {
+			return false, s.showTreeCommand([]string{"next"})
+		}
+		return false, s.printShellError(fmt.Errorf("`next` is available in walk mode and tree mode."))
+	case "prev":
+		if s.walkActive {
+			return false, s.walkMove(-1)
+		}
+		if s.currentMode == "tree" {
+			return false, s.showTreeCommand([]string{"prev"})
+		}
+		return false, s.printShellError(fmt.Errorf("`prev` is available in walk mode and tree mode."))
+	case "leave", "leavewalk", "unwalk":
+		if s.walkActive {
+			return false, s.exitWalk()
+		}
+		return false, s.printShellError(fmt.Errorf("Walk mode is not active."))
+	case "full":
+		if len(args) == 0 {
+			return false, s.showFullCurrentEntity()
+		}
+		if len(args) == 1 {
+			return false, s.showFullTarget(args[0])
+		}
+		return false, s.printShellError(fmt.Errorf("Usage: full [n]"))
+	case "open-current":
+		if s.walkActive {
+			return false, s.openWalkCurrent()
+		}
+		return false, s.printShellError(fmt.Errorf("`open-current` is available in walk mode."))
 	case "open", "o":
 		if len(args) != 1 {
 			_, err := fmt.Fprintln(s.stdout, "Usage: open <n>")
@@ -261,7 +362,7 @@ func (s *shellSession) handleWithStop(line string) (bool, error) {
 	case "forward", "f":
 		return false, s.forward()
 	case "report":
-		return false, s.showReport()
+		return false, s.showContextReport(args)
 	case "status":
 		return false, s.showStatus()
 	case "menu", "m":
@@ -274,6 +375,7 @@ func (s *shellSession) handleWithStop(line string) (bool, error) {
 		}
 		return false, s.showSymbol(line, true)
 	}
+	return false, nil
 }
 
 func (s *shellSession) printHelp() error {
@@ -282,7 +384,7 @@ func (s *shellSession) printHelp() error {
 	}
 	_, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  symbol <query> | s <query>   open a symbol journey card\n  file [path]                travel through symbols in a file\n  menu | m                   show numbered next-step actions for current symbol\n  callers                    show direct callers and let you open them\n  callees                    show direct callees and let you open them\n  refs [in|out]              show references with use-site snippets\n  tests                      show related tests\n  related                    show sibling/nearby symbols\n  impact [query]             show impact summary for current or named symbol\n  source [n] | body [n]      show source/body for the current or listed target\n  copy [n]                   copy the current or listed target context\n  report                     project summary\n  status                     snapshot status\n  open <n>                   open item from the last numbered list\n  back / forward             navigate symbol history\n  clear                      redraw the current screen cleanly\n  quit                       exit the shell\n\n%s\n  after a symbol card, type 1..N to open the suggested next step\n  after a list, type a number to open that item directly\n  after a file journey, use source <n> to peek a body before opening it\n\n",
+		"%s\n  home | main                return to the main menu\n  tree [next|prev|page <n>]  show the project structure page by page\n  symbol <query> | s <query> open a symbol journey card\n  file [path|n]              travel through symbols in a file by path or tree number\n  walk [path|n|next|prev|open|full|exit]\n                             step through entities in the current file\n  menu | m                   show numbered next-step actions for current symbol\n  callers                    show direct callers and let you open them\n  callees                    show direct callees and let you open them\n  refs [in|out]              show references with use-site snippets\n  tests                      show related tests\n  related                    show sibling/nearby symbols\n  impact [query]             show impact summary for current or named symbol\n  source [n] | body [n]      show source/body for the current or listed target\n  source full [n] | full [n] show the full current or listed entity body\n  copy [n]                   copy the current or listed target context\n  report [project|entity|file]\n                             show a project, current symbol, or current file report\n  status                     snapshot status\n  open <n>                   open item from the last numbered list\n  back / forward             navigate symbol history\n  clear                      redraw the current screen cleanly\n  quit                       exit the shell\n\n%s\n  after a symbol card, type 1..N to open the suggested next step\n  after a list, type a number to open that item directly\n  after a tree screen, use file <n> or open <n> to jump by the shown file number\n  use tree next / tree prev / tree page <n> to inspect the whole tree without truncation\n  inside walk mode, use next / prev / full / open-current / leave\n  after a file journey, use source <n> to peek a body before opening it\n  use report with no args to get a report for the thing you are currently in\n\n",
 		s.palette.section("Shell Help"),
 		s.palette.section("Number Flow"),
 	)
@@ -325,12 +427,14 @@ func (s *shellSession) showLanding() error {
 	}
 	if _, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  1. type a symbol name like %s\n  2. use %s after opening a symbol\n  3. type %s in lists to open things directly\n  4. use %s to redraw the current screen cleanly\n\n",
+		"%s\n  1. type a symbol name like %s\n  2. type %s to see the project structure\n  3. use %s after opening a symbol or file\n  4. type %s or %s in lists to open things directly\n  5. use %s to come back here anytime\n\n",
 		s.palette.section("Quick Start"),
 		s.palette.accent("Parse"),
+		s.palette.accent("tree"),
+		s.palette.accent("report"),
 		s.palette.accent("1..N"),
-		s.palette.accent("1..N"),
-		s.palette.accent("clear"),
+		s.palette.accent("file <n>"),
+		s.palette.accent("home"),
 	); err != nil {
 		return err
 	}
@@ -384,7 +488,7 @@ func (s *shellSession) showLanding() error {
 			}
 		}
 	}
-	_, err = fmt.Fprintf(s.stdout, "\n%s type a symbol name, `file`, `file <path>`, or just press 1..%d to jump in.\n\n", s.palette.label("Start:"), len(s.lastTargets))
+	_, err = fmt.Fprintf(s.stdout, "\n%s type a symbol name, `tree`, `file`, `file <path>`, `file <n>`, or just press 1..%d to jump in.\n\n", s.palette.label("Start:"), len(s.lastTargets))
 	return err
 }
 
@@ -421,13 +525,12 @@ func (s *shellSession) showSymbol(query string, pushHistory bool) error {
 		})
 		if _, err := fmt.Fprintf(
 			s.stdout,
-			"  [%d] %s %s\n      %s\n      %s:%d\n",
+			"  [%d] %s %s\n      %s\n      %s\n",
 			idx+1,
 			s.palette.kindBadge(match.Kind),
 			shortenQName(s.info.ModulePath, match.QName),
 			styleHumanSignature(s.palette, displaySignature(match)),
-			match.FilePath,
-			match.Line,
+			symbolRangeDisplay(s.info.Root, match),
 		); err != nil {
 			return err
 		}
@@ -523,11 +626,30 @@ func (s *shellSession) showFileJourney(query string) error {
 	if err != nil {
 		return s.printShellError(err)
 	}
+	isDir, err := s.isDirectoryQuery(relPath)
+	if err != nil {
+		return err
+	}
+	if isDir {
+		if relPath == "." || relPath == "" {
+			return s.showTree()
+		}
+		return s.printShellError(fmt.Errorf("%s is a directory. Use `tree` to explore directories and `file <path>` for files.", relPath))
+	}
 
 	symbols, err := s.store.LoadFileSymbols(relPath)
 	if err != nil {
 		return err
 	}
+	entries, err := s.loadFileReportEntries(relPath)
+	if err != nil {
+		return err
+	}
+	summaries, err := s.store.LoadFileSummaries()
+	if err != nil {
+		return err
+	}
+	summary := summaries[relPath]
 
 	s.currentMode = "file"
 	s.currentFile = relPath
@@ -548,7 +670,7 @@ func (s *shellSession) showFileJourney(query string) error {
 			Line:      symbol.Line,
 		})
 	}
-	return s.renderFileJourney(relPath, focusSymbolKey, symbols)
+	return s.renderFileJourney(relPath, focusSymbolKey, symbols, summary, entries)
 }
 
 func (s *shellSession) resolveFileQuery(query string) (string, string, error) {
@@ -569,6 +691,12 @@ func (s *shellSession) resolveFileQuery(query string) (string, string, error) {
 			return target.FilePath, target.SymbolKey, nil
 		}
 	}
+	if index, err := strconv.Atoi(strings.TrimSpace(query)); err == nil && index >= 1 && index <= len(s.treeTargets) {
+		target := s.treeTargets[index-1]
+		if target.FilePath != "" {
+			return target.FilePath, target.SymbolKey, nil
+		}
+	}
 
 	candidate := filepath.Clean(query)
 	if filepath.IsAbs(candidate) {
@@ -582,6 +710,25 @@ func (s *shellSession) resolveFileQuery(query string) (string, string, error) {
 	return candidate, "", nil
 }
 
+func (s *shellSession) isDirectoryQuery(relPath string) (bool, error) {
+	candidate := relPath
+	if candidate == "" {
+		candidate = "."
+	}
+	path := candidate
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(s.info.Root, filepath.FromSlash(candidate))
+	}
+	stat, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect path %s: %w", candidate, err)
+	}
+	return stat.IsDir(), nil
+}
+
 func (s *shellSession) showSourceTarget(arg string) error {
 	target, ok := s.targetFromArg(arg)
 	if !ok {
@@ -593,6 +740,10 @@ func (s *shellSession) showSourceTarget(arg string) error {
 		view, err := s.store.LoadSymbolView(target.SymbolKey)
 		if err == nil {
 			match = view.Symbol
+			s.currentKey = view.Symbol.SymbolKey
+			s.currentQName = view.Symbol.QName
+			s.currentFile = view.Symbol.FilePath
+			s.currentMode = "symbol"
 		}
 		if err := s.beginScreen("Body Preview"); err != nil {
 			return err
@@ -615,6 +766,37 @@ func (s *shellSession) showSourceTarget(arg string) error {
 	}
 }
 
+func (s *shellSession) showFullTarget(arg string) error {
+	target, ok := s.targetFromArg(arg)
+	if !ok {
+		return s.printShellError(fmt.Errorf("No list item %q to open fully", arg))
+	}
+	if target.Kind != "symbol" {
+		return s.printShellError(fmt.Errorf("Target %q is not a symbol body", arg))
+	}
+
+	view, err := s.store.LoadSymbolView(target.SymbolKey)
+	if err != nil {
+		return err
+	}
+	s.currentKey = view.Symbol.SymbolKey
+	s.currentQName = view.Symbol.QName
+	s.currentFile = view.Symbol.FilePath
+	s.currentMode = "symbol"
+	if err := s.beginScreen("Full Body"); err != nil {
+		return err
+	}
+	if err := s.writeCurrentSymbolSummary(view); err != nil {
+		return err
+	}
+	source, err := renderSymbolSource(s.info.Root, s.batPath, view.Symbol, 0, s.palette.enabled)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(s.stdout, "%s\n%s\n\n", s.palette.section("Full Entity Body"), source)
+	return err
+}
+
 func (s *shellSession) copyCurrent(arg string) error {
 	var text string
 	if strings.TrimSpace(arg) != "" {
@@ -628,7 +810,9 @@ func (s *shellSession) copyCurrent(arg string) error {
 			if err != nil {
 				return err
 			}
-			text = fmt.Sprintf("%s\n%s:%d", displaySignature(view.Symbol), view.Symbol.FilePath, view.Symbol.Line)
+			text = fmt.Sprintf("%s\n%s", displaySignature(view.Symbol), symbolRangeDisplay(s.info.Root, view.Symbol))
+		case "file":
+			text = target.FilePath
 		default:
 			text = fmt.Sprintf("%s\n%s:%d", target.Label, target.FilePath, target.Line)
 		}
@@ -639,7 +823,7 @@ func (s *shellSession) copyCurrent(arg string) error {
 		if err != nil {
 			return err
 		}
-		text = fmt.Sprintf("%s\n%s:%d", displaySignature(view.Symbol), view.Symbol.FilePath, view.Symbol.Line)
+		text = fmt.Sprintf("%s\n%s", displaySignature(view.Symbol), symbolRangeDisplay(s.info.Root, view.Symbol))
 	}
 	if text == "" {
 		return s.printShellError(fmt.Errorf("Nothing to copy yet. Open a symbol or file first."))
@@ -822,13 +1006,12 @@ func (s *shellSession) listRelated() error {
 		})
 		if _, err := fmt.Fprintf(
 			s.stdout,
-			"  [%d] %s %s\n      %s\n      %s:%d\n",
+			"  [%d] %s %s\n      %s\n      %s\n",
 			idx+1,
 			s.palette.kindBadge(symbol.Kind),
 			shortenQName(s.info.ModulePath, symbol.QName),
 			styleHumanSignature(s.palette, displaySignature(symbol)),
-			symbol.FilePath,
-			symbol.Line,
+			symbolRangeDisplay(s.info.Root, symbol),
 		); err != nil {
 			return err
 		}
@@ -876,8 +1059,7 @@ func (s *shellSession) showReport() error {
 	if err != nil {
 		return err
 	}
-	s.currentMode = "landing"
-	s.currentFile = ""
+	s.currentMode = "report"
 	if err := s.beginScreen("Project Report"); err != nil {
 		return err
 	}
@@ -893,8 +1075,7 @@ func (s *shellSession) showStatus() error {
 	if err != nil {
 		return err
 	}
-	s.currentMode = "landing"
-	s.currentFile = ""
+	s.currentMode = "status"
 	if err := s.beginScreen("Status"); err != nil {
 		return err
 	}
@@ -948,11 +1129,14 @@ func (s *shellSession) showAutoDriveForView(view storage.SymbolView) error {
 		{Kind: "action", Action: "impact"},
 		{Kind: "action", Action: "source"},
 		{Kind: "action", Action: "copy"},
+		{Kind: "action", Action: "entity_report"},
+		{Kind: "action", Action: "tree"},
+		{Kind: "action", Action: "home"},
 	}
 
 	if _, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  [1] File Journey        walk the current file\n  [2] Callers (%d)        follow who reaches this symbol\n  [3] Callees (%d)        follow what this symbol uses\n  [4] Refs In (%d)        inspect incoming references\n  [5] Refs Out (%d)       inspect outgoing references\n  [6] Tests (%d)          jump to related tests\n  [7] Related (%d)        nearby symbols in the same area\n  [8] Impact              show broader blast radius\n  [9] Source / Body       open a wider source excerpt\n  [10] Copy               copy signature + location\n\n%s type a number, or use file/callers/callees/refs/tests/related/impact/source/copy directly\n\n",
+		"%s\n  [1] File Journey        open the file card, then use walk if you want a guided pass\n  [2] Callers (%d)        follow who reaches this symbol\n  [3] Callees (%d)        follow what this symbol uses\n  [4] Refs In (%d)        inspect incoming references\n  [5] Refs Out (%d)       inspect outgoing references\n  [6] Tests (%d)          jump to related tests\n  [7] Related (%d)        nearby symbols in the same area\n  [8] Impact              show broader blast radius\n  [9] Source / Body       open a wider source excerpt\n  [10] Copy               copy signature + location\n  [11] Entity Report      get a denser report for this symbol\n  [12] Tree               jump to the project structure\n  [13] Home               return to the main menu\n\n%s type a number, or use file/walk/callers/callees/refs/tests/related/impact/source/full/copy/report/tree/home directly\n\n",
 		s.palette.section("Next Steps"),
 		len(view.Callers),
 		len(view.Callees),
@@ -989,6 +1173,13 @@ func (s *shellSession) runAction(action string) error {
 		return s.showSource()
 	case "copy":
 		return s.copyCurrent("")
+	case "entity_report":
+		return s.showEntityReport("")
+	case "tree":
+		return s.showTree()
+	case "home":
+		s.resetToHome()
+		return s.showLanding()
 	default:
 		_, err := fmt.Fprintf(s.stdout, "Unknown action %q\n\n", action)
 		return err
@@ -1023,13 +1214,12 @@ func (s *shellSession) renderRelatedList(title string, values []storage.RelatedS
 		})
 		if _, err := fmt.Fprintf(
 			s.stdout,
-			"  [%d] %s %s\n      %s\n      declared: %s:%d\n      use: %s:%d",
+			"  [%d] %s %s\n      %s\n      declared: %s\n      use: %s:%d",
 			idx+1,
 			s.palette.kindBadge(value.Symbol.Kind),
 			shortenQName(s.info.ModulePath, value.Symbol.QName),
 			styleHumanSignature(s.palette, displaySignature(value.Symbol)),
-			value.Symbol.FilePath,
-			value.Symbol.Line,
+			symbolRangeDisplay(s.info.Root, value.Symbol),
 			value.UseFilePath,
 			value.UseLine,
 		); err != nil {
@@ -1086,13 +1276,12 @@ func (s *shellSession) renderRefList(title string, values []storage.RefView) err
 		})
 		if _, err := fmt.Fprintf(
 			s.stdout,
-			"  [%d] %s %s\n      %s\n      declared: %s:%d\n      ref: %s:%d [%s]\n",
+			"  [%d] %s %s\n      %s\n      declared: %s\n      ref: %s:%d [%s]\n",
 			idx+1,
 			s.palette.kindBadge(value.Symbol.Kind),
 			shortenQName(s.info.ModulePath, value.Symbol.QName),
 			styleHumanSignature(s.palette, displaySignature(value.Symbol)),
-			value.Symbol.FilePath,
-			value.Symbol.Line,
+			symbolRangeDisplay(s.info.Root, value.Symbol),
 			value.UseFilePath,
 			value.UseLine,
 			value.Kind,

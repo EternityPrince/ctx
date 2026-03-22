@@ -91,7 +91,7 @@ func runShell(command cli.Command, stdout io.Writer) error {
 		return runShellREPL(command, stdout)
 	}
 
-	info, store, scanned, previous, err := openProjectState(command.Root)
+	info, store, scanned, previous, err := openPreparedProjectState(command)
 	if err != nil {
 		return err
 	}

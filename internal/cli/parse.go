@@ -479,26 +479,68 @@ func (ioDiscard) Write(p []byte) (int, error) {
 }
 
 func usageError(err error) error {
-	message := `ctx: local Go code intelligence for project exploration.
+	message := `ctx: local Go code intelligence for exploring a project as a system.
 
-Modes:
-  Human mode is the default. For explicit human-friendly output use -h or -human on supported commands.
-  AI mode uses -a or -ai for compact token-efficient output.
+Philosophy:
+  Give ctx a Go codebase and it helps you read it in flow:
+  find a function, understand its contract, inspect its callers and callees,
+  see where it lives, what depends on it, which tests are nearby, and move on.
+
+  ctx is built to be useful even without AI:
+  indexing, symbol lookup, impact analysis, file/package context, shell navigation,
+  snapshots, and project diffs all work as deterministic local features.
+
+Quick Start:
+  ctx index .                 build the first project snapshot
+  ctx symbol CreateSession    inspect one symbol deeply
+  ctx impact CreateSession    estimate blast radius
+  ctx report .                get a project map
+  ctx shell                   enter the exploration shell
 
 Usage:
   ctx [path] [legacy report flags]
-  ctx shell [query] [--root path]
   ctx dump [path] [legacy report flags]
   ctx index [path] [--note text]
   ctx update [path] [--note text]
   ctx status [path] [-h|-human|-a|-ai]
+  ctx report [path] [-h|-human|-a|-ai] [-limit N]
   ctx symbol <query> [--root path] [-h|-human|-a|-ai]
   ctx impact <query> [--root path] [--depth N] [-h|-human|-a|-ai]
-  ctx report [path] [-h|-human|-a|-ai] [-limit N]
   ctx diff [--root path] [--from N] [--to N]
+  ctx shell [query] [--root path]
   ctx projects [list|rm|prune]
 
-Legacy report flags:
+Core Commands:
+  index      create or rebuild a snapshot-backed index for the current Go project
+  update     incrementally refresh the index after local code changes
+  status     show snapshot freshness, inventory, and current index state
+  report     summarize the project as packages, files, symbols, and hotspots
+  symbol     show declaration, signature, context, refs, callers, callees, tests, impact
+  impact     show what may be affected if a symbol changes
+  diff       compare snapshots and see what changed
+  shell      explore the project in a human-oriented flow shell
+  projects   inspect and clean up locally indexed projects
+  dump       legacy full file/context dump for clipboard or external tooling
+
+Output Modes:
+  Human mode is the default. Use -h or -human for clear, sectioned, readable output.
+  AI mode uses -a or -ai for compact, token-efficient output that is easy to pipe into tools.
+
+Shell Flow:
+  file [path|n]     inspect a file as a map of entities
+  walk              move through file entities one by one
+  callers/callees   follow graph edges
+  refs/tests        inspect usage and verification context
+  source/full       preview or fully open the current entity body
+  tree/home/report  move between project, file, and entity perspectives
+
+Install:
+  make build
+  make install
+  ./scripts/install.sh
+  ./scripts/reinstall.sh
+
+Legacy dump flags:
   -hidden            include hidden files and directories
   -max-file-size     maximum file size in bytes (default 2097152)
   -output            write report to a file

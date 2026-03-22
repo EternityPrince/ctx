@@ -92,6 +92,45 @@ func symbolBlockBounds(projectRoot string, symbol storage.SymbolMatch) (string, 
 	return path, start, end, lines, nil
 }
 
+func symbolRange(projectRoot string, symbol storage.SymbolMatch) (int, int, error) {
+	_, start, end, _, err := symbolBlockBounds(projectRoot, symbol)
+	if err != nil {
+		return 0, 0, err
+	}
+	return start, end, nil
+}
+
+func symbolRangeDisplay(projectRoot string, symbol storage.SymbolMatch) string {
+	start, end, err := symbolRange(projectRoot, symbol)
+	if err != nil || start == 0 {
+		return fmt.Sprintf("%s:%d", symbol.FilePath, symbol.Line)
+	}
+	if end <= start {
+		return fmt.Sprintf("%s:%d", symbol.FilePath, start)
+	}
+	return fmt.Sprintf("%s:%d->%d", symbol.FilePath, start, end)
+}
+
+func symbolLineCount(projectRoot string, symbol storage.SymbolMatch) int {
+	start, end, err := symbolRange(projectRoot, symbol)
+	if err != nil || start == 0 {
+		return 0
+	}
+	if end < start {
+		return 1
+	}
+	return end - start + 1
+}
+
+func symbolRangeWithCountDisplay(projectRoot string, symbol storage.SymbolMatch) string {
+	base := symbolRangeDisplay(projectRoot, symbol)
+	lineCount := symbolLineCount(projectRoot, symbol)
+	if lineCount <= 0 {
+		return base
+	}
+	return fmt.Sprintf("%s (%dL)", base, lineCount)
+}
+
 func nodeStartLine(fset *token.FileSet, doc *ast.CommentGroup, pos token.Pos) int {
 	if doc != nil {
 		if line := fset.Position(doc.Pos()).Line; line > 0 {
