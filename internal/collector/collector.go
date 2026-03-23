@@ -28,7 +28,7 @@ func Collect(options config.Options) (*model.Snapshot, error) {
 
 	err := filepath.WalkDir(options.Root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			return filter.HandleWalkError(path, walkErr)
 		}
 
 		relPath, err := filepath.Rel(options.Root, path)
@@ -44,7 +44,7 @@ func Collect(options config.Options) (*model.Snapshot, error) {
 		name := entry.Name()
 		if entry.IsDir() {
 			snapshot.Stats.DirectoriesScanned++
-			if skip, reason := filter.SkipDirectory(name, options.IncludeHidden); skip {
+			if skip, reason := filter.SkipDirectory(path, name, options.IncludeHidden); skip {
 				snapshot.Stats.DirectoriesSkipped++
 				skipReasons[reason]++
 				return filepath.SkipDir

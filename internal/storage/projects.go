@@ -16,9 +16,35 @@ type ProjectRecord struct {
 	ModulePath        string
 	GoVersion         string
 	CurrentSnapshotID int64
+	SnapshotCount     int
+	SnapshotLimit     int
 	UpdatedAt         time.Time
 	DBPath            string
 	SizeBytes         int64
+}
+
+func ResolveProject(projectArg string) (ProjectRecord, error) {
+	records, err := ListProjects()
+	if err != nil {
+		return ProjectRecord{}, err
+	}
+
+	var matches []ProjectRecord
+	for _, record := range records {
+		if record.ID == projectArg || record.RootPath == projectArg || record.ModulePath == projectArg {
+			return record, nil
+		}
+		if strings.HasPrefix(record.ID, projectArg) || strings.HasPrefix(record.RootPath, projectArg) || strings.HasPrefix(record.ModulePath, projectArg) {
+			matches = append(matches, record)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		return ProjectRecord{}, fmt.Errorf("project %q is ambiguous", projectArg)
+	}
+	return ProjectRecord{}, fmt.Errorf("project %q not found", projectArg)
 }
 
 func loadProjectRecord(dbPath string) (ProjectRecord, error) {
@@ -31,7 +57,7 @@ func loadProjectRecord(dbPath string) (ProjectRecord, error) {
 	record := ProjectRecord{DBPath: dbPath}
 	var updatedAt string
 	err = store.db.QueryRow(`
-		SELECT project_id, root_path, module_path, go_version, updated_at, current_snapshot_id
+		SELECT project_id, root_path, module_path, go_version, updated_at, current_snapshot_id, snapshot_limit
 		FROM project_meta
 		LIMIT 1
 	`).Scan(
@@ -41,6 +67,7 @@ func loadProjectRecord(dbPath string) (ProjectRecord, error) {
 		&record.GoVersion,
 		&updatedAt,
 		&record.CurrentSnapshotID,
+		&record.SnapshotLimit,
 	)
 	if err != nil {
 		return ProjectRecord{}, err
@@ -54,6 +81,7 @@ func loadProjectRecord(dbPath string) (ProjectRecord, error) {
 	if err == nil {
 		record.SizeBytes = stat.Size()
 	}
+	_ = store.db.QueryRow(`SELECT COUNT(*) FROM snapshots`).Scan(&record.SnapshotCount)
 	return record, nil
 }
 
@@ -79,20 +107,16 @@ func ListProjects() ([]ProjectRecord, error) {
 }
 
 func RemoveProject(projectArg string) error {
-	records, err := ListProjects()
+	record, err := ResolveProject(projectArg)
 	if err != nil {
 		return err
 	}
-	for _, record := range records {
-		if record.ID == projectArg || record.RootPath == projectArg || strings.HasPrefix(record.ID, projectArg) {
-			dir, err := project.ProjectDir(record.ID)
-			if err != nil {
-				return err
-			}
-			return os.RemoveAll(dir)
-		}
+
+	dir, err := project.ProjectDir(record.ID)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("project %q not found", projectArg)
+	return os.RemoveAll(dir)
 }
 
 func PruneProjects() (int, error) {

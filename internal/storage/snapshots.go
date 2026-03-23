@@ -3,6 +3,8 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"sort"
 	"time"
 
 	"github.com/vladimirkasterin/ctx/internal/codebase"
@@ -25,14 +27,22 @@ type SnapshotInfo struct {
 	TotalTests      int
 }
 
+type StorageStatus struct {
+	CurrentDBPath        string
+	SnapshotCount        int
+	SnapshotLimit        int
+	TotalSizeBytes       int64
+	AvgSnapshotSizeBytes int64
+}
+
 type ProjectStatus struct {
-	RootPath      string
-	ModulePath    string
-	GoVersion     string
-	Current       SnapshotInfo
-	HasSnapshot   bool
-	ChangedNow    int
-	CurrentDBPath string
+	RootPath    string
+	ModulePath  string
+	GoVersion   string
+	Current     SnapshotInfo
+	HasSnapshot bool
+	ChangedNow  int
+	Storage     StorageStatus
 }
 
 func (s *Store) CurrentSnapshot() (SnapshotInfo, bool, error) {
@@ -91,8 +101,16 @@ func (s *Store) CurrentSnapshot() (SnapshotInfo, bool, error) {
 
 func (s *Store) Status(changedNow int) (ProjectStatus, error) {
 	status := ProjectStatus{
-		ChangedNow:    changedNow,
-		CurrentDBPath: s.dbPath,
+		ChangedNow: changedNow,
+		Storage: StorageStatus{
+			CurrentDBPath: s.dbPath,
+		},
+	}
+
+	if stat, err := os.Stat(s.dbPath); err == nil {
+		status.Storage.TotalSizeBytes = stat.Size()
+	} else if !os.IsNotExist(err) {
+		return ProjectStatus{}, fmt.Errorf("stat db: %w", err)
 	}
 
 	err := s.db.QueryRow(`
@@ -113,6 +131,16 @@ func (s *Store) Status(changedNow int) (ProjectStatus, error) {
 	}
 	status.HasSnapshot = ok
 	status.Current = current
+
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM snapshots`).Scan(&status.Storage.SnapshotCount); err != nil {
+		return ProjectStatus{}, fmt.Errorf("count snapshots: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT snapshot_limit FROM project_meta LIMIT 1`).Scan(&status.Storage.SnapshotLimit); err != nil {
+		return ProjectStatus{}, fmt.Errorf("load snapshot limit: %w", err)
+	}
+	if status.Storage.SnapshotCount > 0 {
+		status.Storage.AvgSnapshotSizeBytes = status.Storage.TotalSizeBytes / int64(status.Storage.SnapshotCount)
+	}
 	return status, nil
 }
 
@@ -226,6 +254,255 @@ func (s *Store) ListSnapshots() ([]SnapshotInfo, error) {
 		return nil, fmt.Errorf("iterate snapshots: %w", err)
 	}
 	return snapshots, nil
+}
+
+func (s *Store) SetSnapshotLimit(limit int) error {
+	if limit < 0 {
+		return fmt.Errorf("snapshot limit cannot be negative")
+	}
+	if _, err := s.db.Exec(`UPDATE project_meta SET snapshot_limit = ?, updated_at = ?`, limit, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("set snapshot limit: %w", err)
+	}
+	return s.EnforceSnapshotLimit()
+}
+
+func (s *Store) EnforceSnapshotLimit() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := enforceSnapshotLimitTx(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit snapshot prune: %w", err)
+	}
+	return vacuumDB(s.db)
+}
+
+func (s *Store) DeleteSnapshots(ids []int64) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	removed, err := deleteSnapshotsTx(tx, ids, false)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit snapshot delete: %w", err)
+	}
+	if removed > 0 {
+		if err := vacuumDB(s.db); err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
+func (s *Store) DeleteAllSnapshots() (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`SELECT id FROM snapshots ORDER BY id`)
+	if err != nil {
+		return 0, fmt.Errorf("query snapshots: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return 0, fmt.Errorf("scan snapshot id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate snapshots: %w", err)
+	}
+
+	removed, err := deleteSnapshotsTx(tx, ids, true)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit snapshot delete all: %w", err)
+	}
+	if removed > 0 {
+		if err := vacuumDB(s.db); err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
+func deleteSnapshotsTx(tx *sql.Tx, ids []int64, allowDeleteCurrent bool) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	currentID, err := currentSnapshotIDTx(tx)
+	if err != nil {
+		return 0, err
+	}
+
+	seen := make(map[int64]struct{}, len(ids))
+	normalized := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if !allowDeleteCurrent && currentID != 0 && id == currentID {
+			return 0, fmt.Errorf("cannot delete current snapshot %d", id)
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalized = append(normalized, id)
+	}
+	if len(normalized) == 0 {
+		return 0, nil
+	}
+	sort.Slice(normalized, func(i, j int) bool { return normalized[i] < normalized[j] })
+
+	tables := []string{"packages", "files", "symbols", "package_deps", "refs", "call_edges", "tests", "test_links", "snapshots"}
+	removed := 0
+	for _, id := range normalized {
+		exists, err := snapshotExistsTx(tx, id)
+		if err != nil {
+			return removed, err
+		}
+		if !exists {
+			continue
+		}
+		for _, table := range tables {
+			column := "snapshot_id"
+			if table == "snapshots" {
+				column = "id"
+			}
+			if _, err := tx.Exec(`DELETE FROM `+table+` WHERE `+column+` = ?`, id); err != nil {
+				return removed, fmt.Errorf("delete snapshot %d from %s: %w", id, table, err)
+			}
+		}
+		removed++
+	}
+
+	nextCurrent := currentID
+	if allowDeleteCurrent {
+		if exists, err := snapshotExistsTx(tx, currentID); err != nil {
+			return removed, err
+		} else if !exists {
+			nextCurrent, err = latestSnapshotIDTx(tx)
+			if err != nil {
+				return removed, err
+			}
+		}
+	}
+	if _, err := tx.Exec(`UPDATE project_meta SET current_snapshot_id = ?, updated_at = ?`, nextCurrent, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return removed, fmt.Errorf("update current snapshot after delete: %w", err)
+	}
+	return removed, nil
+}
+
+func enforceSnapshotLimitTx(tx *sql.Tx) (int, error) {
+	limit, err := snapshotLimitTx(tx)
+	if err != nil {
+		return 0, err
+	}
+	if limit <= 0 {
+		return 0, nil
+	}
+
+	currentID, err := currentSnapshotIDTx(tx)
+	if err != nil {
+		return 0, err
+	}
+
+	rows, err := tx.Query(`SELECT id FROM snapshots ORDER BY id DESC`)
+	if err != nil {
+		return 0, fmt.Errorf("query snapshots for limit: %w", err)
+	}
+	defer rows.Close()
+
+	keep := make([]int64, 0, limit)
+	var deleteIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return 0, fmt.Errorf("scan snapshot id: %w", err)
+		}
+		if id == currentID {
+			keep = append(keep, id)
+			continue
+		}
+		if len(keep) < limit {
+			keep = append(keep, id)
+			continue
+		}
+		deleteIDs = append(deleteIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate snapshots for limit: %w", err)
+	}
+	return deleteSnapshotsTx(tx, deleteIDs, false)
+}
+
+func currentSnapshotIDTx(tx *sql.Tx) (int64, error) {
+	var currentID int64
+	if err := tx.QueryRow(`SELECT current_snapshot_id FROM project_meta LIMIT 1`).Scan(&currentID); err != nil {
+		return 0, fmt.Errorf("load current snapshot id: %w", err)
+	}
+	return currentID, nil
+}
+
+func latestSnapshotIDTx(tx *sql.Tx) (int64, error) {
+	var next sql.NullInt64
+	if err := tx.QueryRow(`SELECT MAX(id) FROM snapshots`).Scan(&next); err != nil {
+		return 0, fmt.Errorf("load latest snapshot id: %w", err)
+	}
+	if !next.Valid {
+		return 0, nil
+	}
+	return next.Int64, nil
+}
+
+func snapshotExistsTx(tx *sql.Tx, id int64) (bool, error) {
+	if id == 0 {
+		return false, nil
+	}
+	var count int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM snapshots WHERE id = ?`, id).Scan(&count); err != nil {
+		return false, fmt.Errorf("check snapshot %d: %w", id, err)
+	}
+	return count > 0, nil
+}
+
+func snapshotLimitTx(tx *sql.Tx) (int, error) {
+	var limit int
+	if err := tx.QueryRow(`SELECT snapshot_limit FROM project_meta LIMIT 1`).Scan(&limit); err != nil {
+		return 0, fmt.Errorf("load snapshot limit: %w", err)
+	}
+	return limit, nil
+}
+
+func vacuumDB(db *sql.DB) error {
+	if _, err := db.Exec(`VACUUM`); err != nil {
+		return fmt.Errorf("vacuum sqlite db: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) CommitSnapshot(kind, note string, scanned []codebase.ScanFile, result *codebase.Result, changes codebase.ChangeSet, full bool) (SnapshotInfo, error) {
@@ -349,9 +626,18 @@ func (s *Store) CommitSnapshot(kind, note string, scanned []codebase.ScanFile, r
 	if err != nil {
 		return SnapshotInfo{}, fmt.Errorf("update project meta: %w", err)
 	}
+	pruned, err := enforceSnapshotLimitTx(tx)
+	if err != nil {
+		return SnapshotInfo{}, err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return SnapshotInfo{}, fmt.Errorf("commit snapshot: %w", err)
+	}
+	if pruned > 0 {
+		if err := vacuumDB(s.db); err != nil {
+			return SnapshotInfo{}, err
+		}
 	}
 
 	return s.SnapshotByID(snapshotID)

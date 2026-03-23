@@ -2,16 +2,10 @@ package app
 
 import (
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
-	"github.com/vladimirkasterin/ctx/internal/filter"
 	"github.com/vladimirkasterin/ctx/internal/model"
 	"github.com/vladimirkasterin/ctx/internal/storage"
-	"github.com/vladimirkasterin/ctx/internal/text"
 	projecttree "github.com/vladimirkasterin/ctx/internal/tree"
 )
 
@@ -38,7 +32,7 @@ type shellTreeLine struct {
 
 type treeAggregate struct {
 	TotalFiles            int
-	GoFiles               int
+	SourceFiles           int
 	TestFiles             int
 	IndexedFiles          int
 	TotalLines            int
@@ -57,39 +51,24 @@ func (s *shellSession) showTree() error {
 }
 
 func (s *shellSession) showTreeCommand(args []string) error {
-	page := s.treePage
-	if s.currentMode != "tree" {
-		page = 0
+	mode, scope, page, err := s.parseTreeCommand(args)
+	if err != nil {
+		return s.printShellError(err)
 	}
 
-	if len(args) > 0 {
-		switch strings.ToLower(strings.TrimSpace(args[0])) {
-		case "next", "more":
-			page++
-		case "prev", "back":
-			if page > 0 {
-				page--
-			}
-		case "root":
-			page = 0
-		case "page":
-			if len(args) < 2 {
-				return s.printShellError(fmt.Errorf("Usage: tree page <n>"))
-			}
-			value, err := strconv.Atoi(strings.TrimSpace(args[1]))
-			if err != nil || value < 1 {
-				return s.printShellError(fmt.Errorf("Invalid tree page %q", args[1]))
-			}
-			page = value - 1
-		default:
-			value, err := strconv.Atoi(strings.TrimSpace(args[0]))
-			if err != nil || value < 1 {
-				return s.printShellError(fmt.Errorf("Usage: tree [next|prev|page <n>|root]"))
-			}
-			page = value - 1
-		}
+	s.currentMode = "tree"
+	s.treeMode = mode
+	s.treeScope = scope
+	s.treePage = page
+
+	switch mode {
+	case shellTreeModeDirs:
+		return s.showTreeDirsPage(page)
+	case shellTreeModeHot:
+		return s.showTreeHotPage(page)
+	default:
+		return s.showTreePage(page)
 	}
-	return s.showTreePage(page)
 }
 
 func (s *shellSession) showTreePage(page int) error {
@@ -109,12 +88,16 @@ func (s *shellSession) showTreePage(page int) error {
 	}
 
 	treeRoot := projecttree.Build(s.info.Root, directories, fileNodes)
+	scopeNode, err := treeNodeForScope(treeRoot, s.treeScope)
+	if err != nil {
+		return s.printShellError(err)
+	}
 	fileSummaries, err := s.store.LoadFileSummaries()
 	if err != nil {
 		return err
 	}
 	dirLines := directoryLineTotals(scannedFiles)
-	allLines := buildShellTreeLines(treeRoot, scannedFiles, fileSummaries, dirLines, s.currentFile)
+	allLines := buildShellTreeLines(scopeNode, normalizeTreeScope(s.treeScope), scannedFiles, fileSummaries, dirLines, s.currentFile)
 	totalPages := max(1, (len(allLines)+shellTreePageSize-1)/shellTreePageSize)
 	if page < 0 {
 		page = 0
@@ -128,35 +111,35 @@ func (s *shellSession) showTreePage(page int) error {
 	end := min(len(allLines), start+shellTreePageSize)
 	visible := allLines[start:end]
 
-	report, err := s.store.LoadReportView(6)
+	report, err := s.store.LoadReportView(12)
 	if err != nil {
 		return err
 	}
-	aggregate := aggregateTree(scannedFiles, fileSummaries)
+	aggregate := aggregateTree(filterTreeFilesByScope(scannedFiles, s.treeScope), fileSummaries)
 
-	s.currentMode = "tree"
 	s.lastTargets = s.lastTargets[:0]
-	s.treeTargets = s.treeTargets[:0]
-	for _, line := range allLines {
-		if line.IsDir {
+	for idx := range visible {
+		if visible[idx].IsDir {
 			continue
 		}
-		s.treeTargets = append(s.treeTargets, shellTarget{
+		visible[idx].FileIndex = len(s.lastTargets) + 1
+		s.lastTargets = append(s.lastTargets, shellTarget{
 			Kind:     "file",
-			Label:    line.Path,
-			FilePath: line.Path,
+			Label:    visible[idx].Path,
+			FilePath: visible[idx].Path,
 			Line:     1,
 		})
 	}
-	s.lastTargets = append(s.lastTargets, s.treeTargets...)
 
 	if err := s.beginScreen("Project Tree"); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  %s %d  %s %s\n  %s dirs=%d  files=%d  go=%d  test_files=%d\n  %s indexed_files=%d  funcs=%d  methods=%d  structs=%d  tests=%d  test-link=%s\n  %s files are page-numbered, %s rows are test files, and the right column is copy-friendly\n\n",
+		"%s\n  %s %s  %s %d  %s %s\n  %s dirs=%d  files=%d  source=%d  test_files=%d\n  %s indexed_files=%d  funcs=%d  methods=%d  types=%d  tests=%d  test-link=%s\n  %s numbering is local to the current window, %s rows are test files, and the right column is copy-friendly\n\n",
 		s.palette.section("Project Structure"),
+		s.palette.label("Scope:"),
+		treeScopeLabel(s.treeScope),
 		s.palette.label("Total lines:"),
 		aggregate.TotalLines,
 		s.palette.label("Footprint:"),
@@ -164,7 +147,7 @@ func (s *shellSession) showTreePage(page int) error {
 		s.palette.label("Disk view:"),
 		len(directories),
 		aggregate.TotalFiles,
-		aggregate.GoFiles,
+		aggregate.SourceFiles,
 		aggregate.TestFiles,
 		s.palette.label("Code map:"),
 		aggregate.IndexedFiles,
@@ -226,8 +209,8 @@ func (s *shellSession) showTreePage(page int) error {
 		return err
 	}
 
-	indexByPath := make(map[string]int, len(allLines))
-	for _, line := range allLines {
+	indexByPath := make(map[string]int, len(visible))
+	for _, line := range visible {
 		if line.IsDir {
 			continue
 		}
@@ -243,6 +226,10 @@ func (s *shellSession) showTreePage(page int) error {
 				if _, err := fmt.Fprintf(s.stdout, "  [%d] %s\n", number, target.FilePath); err != nil {
 					return err
 				}
+				continue
+			}
+			if _, err := fmt.Fprintf(s.stdout, "  file %s\n", target.FilePath); err != nil {
+				return err
 			}
 		}
 		if _, err := fmt.Fprintln(s.stdout); err != nil {
@@ -252,15 +239,19 @@ func (s *shellSession) showTreePage(page int) error {
 
 	_, err = fmt.Fprintf(
 		s.stdout,
-		"%s\n  %s use %s or %s to jump into a numbered file\n  %s use %s, %s, or %s to explore the full tree without truncation\n  %s use %s to paste the exact path from the right column\n\n",
+		"%s\n  %s use %s or %s to jump into a numbered file\n  %s use %s to choose a directory first or %s to see ranked files\n  %s use %s, %s, %s, or %s to move through the current scope\n  %s use %s to paste the exact path from the right column\n\n",
 		s.palette.section("Workflow"),
 		s.palette.label("Open:"),
 		s.palette.accent("open <n>"),
 		s.palette.accent("file <n>"),
+		s.palette.label("Navigate:"),
+		s.palette.accent("tree dirs"),
+		s.palette.accent("tree hot"),
 		s.palette.label("Explore:"),
 		s.palette.accent("tree next"),
 		s.palette.accent("tree prev"),
 		s.palette.accent("tree page <n>"),
+		s.palette.accent("tree up"),
 		s.palette.label("Direct jump:"),
 		s.palette.accent("file <path>"),
 	)
@@ -282,258 +273,20 @@ func (s *shellSession) treeQuickTargets(report storage.ReportView) []shellTarget
 	}
 
 	if s.currentFile != "" {
-		appendTarget(shellTarget{
-			Kind:      "file",
-			Label:     s.currentFile,
-			FilePath:  s.currentFile,
-			Line:      1,
-			SymbolKey: s.currentKey,
-		})
+		if pathInTreeScope(s.currentFile, s.treeScope) {
+			appendTarget(shellTarget{
+				Kind:      "file",
+				Label:     s.currentFile,
+				FilePath:  s.currentFile,
+				Line:      1,
+				SymbolKey: s.currentKey,
+			})
+		}
 	}
 	for _, target := range s.landingHotFiles(report, 5) {
-		appendTarget(target)
+		if pathInTreeScope(target.FilePath, s.treeScope) {
+			appendTarget(target)
+		}
 	}
 	return targets
-}
-
-func scanProjectTree(root string) ([]string, []shellScannedFile, error) {
-	directories := make([]string, 0, 64)
-	files := make([]shellScannedFile, 0, 128)
-
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		relPath, err := filepath.Rel(root, path)
-		if err != nil {
-			return fmt.Errorf("make relative path: %w", err)
-		}
-		if relPath == "." {
-			return nil
-		}
-
-		relPath = filepath.ToSlash(relPath)
-		name := entry.Name()
-		if entry.IsDir() {
-			switch name {
-			case ".git", "vendor", "node_modules":
-				return filepath.SkipDir
-			}
-			if strings.HasPrefix(name, ".") {
-				return filepath.SkipDir
-			}
-			directories = append(directories, relPath)
-			return nil
-		}
-
-		if strings.HasPrefix(name, ".") {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return fmt.Errorf("read file info: %w", err)
-		}
-
-		lineCount := 0
-		data, err := os.ReadFile(path)
-		if err == nil && !filter.IsLikelyBinary(data) {
-			lineCount, _ = text.CountLines(text.NormalizeNewlines(string(data)))
-		}
-
-		files = append(files, shellScannedFile{
-			Path:      relPath,
-			SizeBytes: info.Size(),
-			LineCount: lineCount,
-			IsTest:    strings.HasSuffix(name, "_test.go"),
-		})
-		return nil
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	return directories, files, nil
-}
-
-func buildShellTreeLines(root *projecttree.Node, scannedFiles []shellScannedFile, summaries map[string]storage.FileSummary, dirLines map[string]int, currentFile string) []shellTreeLine {
-	fileByPath := make(map[string]shellScannedFile, len(scannedFiles))
-	for _, file := range scannedFiles {
-		fileByPath[file.Path] = file
-	}
-
-	lines := []shellTreeLine{{
-		Text:     root.Name + "/",
-		Path:     "",
-		IsDir:    true,
-		DirLines: dirLines[""],
-	}}
-	fileIndex := 0
-	for idx, child := range root.Children {
-		appendShellTreeNode(&lines, child, "", idx == len(root.Children)-1, child.Name, currentFile, fileByPath, summaries, dirLines, &fileIndex)
-	}
-	return lines
-}
-
-func appendShellTreeNode(lines *[]shellTreeLine, node *projecttree.Node, prefix string, last bool, relPath, currentFile string, fileByPath map[string]shellScannedFile, summaries map[string]storage.FileSummary, dirLines map[string]int, fileIndex *int) {
-	branch := "|-- "
-	nextPrefix := prefix + "|   "
-	if last {
-		branch = "`-- "
-		nextPrefix = prefix + "    "
-	}
-
-	line := shellTreeLine{
-		Text:     prefix + branch + node.Name,
-		Path:     filepath.ToSlash(relPath),
-		IsDir:    node.IsDir,
-		DirLines: dirLines[filepath.ToSlash(relPath)],
-		Active:   filepath.ToSlash(relPath) == filepath.ToSlash(currentFile),
-	}
-	if node.IsDir {
-		line.Text += "/"
-	} else {
-		line.Scanned = fileByPath[line.Path]
-		line.Summary = summaries[line.Path]
-		line.IsTest = line.Scanned.IsTest || line.Summary.IsTest
-		*fileIndex = *fileIndex + 1
-		line.FileIndex = *fileIndex
-	}
-	*lines = append(*lines, line)
-
-	for idx, child := range node.Children {
-		childPath := filepath.ToSlash(filepath.Join(relPath, child.Name))
-		appendShellTreeNode(lines, child, nextPrefix, idx == len(node.Children)-1, childPath, currentFile, fileByPath, summaries, dirLines, fileIndex)
-	}
-}
-
-func directoryLineTotals(scannedFiles []shellScannedFile) map[string]int {
-	totals := map[string]int{"": 0}
-	for _, file := range scannedFiles {
-		dir := filepath.ToSlash(filepath.Dir(file.Path))
-		if dir == "." {
-			dir = ""
-		}
-		for {
-			totals[dir] += file.LineCount
-			if dir == "" {
-				break
-			}
-			parent := filepath.ToSlash(filepath.Dir(dir))
-			if parent == "." {
-				parent = ""
-			}
-			dir = parent
-		}
-	}
-	return totals
-}
-
-func aggregateTree(scannedFiles []shellScannedFile, summaries map[string]storage.FileSummary) treeAggregate {
-	var aggregate treeAggregate
-	aggregate.TotalFiles = len(scannedFiles)
-	for _, file := range scannedFiles {
-		aggregate.TotalBytes += file.SizeBytes
-		aggregate.TotalLines += file.LineCount
-		if strings.HasSuffix(file.Path, ".go") {
-			aggregate.GoFiles++
-		}
-		if file.IsTest {
-			aggregate.TestFiles++
-		}
-		if summary, ok := summaries[file.Path]; ok {
-			aggregate.IndexedFiles++
-			aggregate.FuncCount += summary.FuncCount
-			aggregate.MethodCount += summary.MethodCount
-			aggregate.StructCount += summary.StructCount
-			aggregate.DeclaredTestCount += summary.DeclaredTestCount
-			aggregate.RelatedTestCount += summary.RelatedTestCount
-			aggregate.RelevantSymbolCount += summary.RelevantSymbolCount
-			aggregate.TestLinkedSymbolCount += summary.TestLinkedSymbolCount
-		}
-	}
-	return aggregate
-}
-
-func treeColumnWidths(lines []shellTreeLine) (int, int) {
-	hierWidth := 0
-	pathWidth := 0
-	for _, line := range lines {
-		if line.IsDir {
-			continue
-		}
-		hierWidth = max(hierWidth, len(line.Text))
-		pathWidth = max(pathWidth, len(line.Path))
-	}
-	return hierWidth, pathWidth
-}
-
-func (s *shellSession) fileBadge(path string, isTest bool) string {
-	switch {
-	case isTest:
-		return s.palette.kindBadge("test")
-	case strings.HasSuffix(path, ".go"):
-		return "[" + s.palette.wrap("1;36", "GO") + "]"
-	default:
-		return "[" + s.palette.wrap("1;37", "FILE") + "]"
-	}
-}
-
-func (s *shellSession) renderTreeFileMetrics(file shellScannedFile, summary storage.FileSummary) string {
-	parts := []string{
-		fmt.Sprintf("%dL", file.LineCount),
-		shellHumanSize(file.SizeBytes),
-	}
-	if summary.SymbolCount > 0 || summary.IsTest {
-		parts = append(parts,
-			fmt.Sprintf("fn=%d", summary.FuncCount),
-			fmt.Sprintf("m=%d", summary.MethodCount),
-			fmt.Sprintf("st=%d", summary.StructCount),
-		)
-		if summary.IsTest {
-			parts = append(parts, fmt.Sprintf("tests=%d", summary.DeclaredTestCount))
-		} else if summary.RelatedTestCount > 0 || summary.RelevantSymbolCount > 0 {
-			parts = append(parts,
-				fmt.Sprintf("tests=%d", summary.RelatedTestCount),
-				"link="+s.coverageBadge(coveragePercent(summary.TestLinkedSymbolCount, summary.RelevantSymbolCount)),
-			)
-		}
-	}
-	return strings.Join(parts, "  ")
-}
-
-func shellHumanSize(size int64) string {
-	const unit = 1024
-	if size < unit {
-		return fmt.Sprintf("%dB", size)
-	}
-
-	div, exp := int64(unit), 0
-	for n := size / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-
-	suffixes := []string{"KB", "MB", "GB", "TB"}
-	return fmt.Sprintf("%.1f%s", float64(size)/float64(div), suffixes[exp])
-}
-
-func coveragePercent(linked, relevant int) int {
-	if relevant <= 0 {
-		return -1
-	}
-	return (linked * 100) / relevant
-}
-
-func (s *shellSession) coverageBadge(pct int) string {
-	if pct < 0 {
-		return s.palette.muted("n/a")
-	}
-	switch {
-	case pct >= 70:
-		return s.palette.wrap("1;32", fmt.Sprintf("%d%%", pct))
-	case pct >= 35:
-		return s.palette.wrap("1;33", fmt.Sprintf("%d%%", pct))
-	default:
-		return s.palette.wrap("1;31", fmt.Sprintf("%d%%", pct))
-	}
 }

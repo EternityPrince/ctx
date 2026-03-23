@@ -33,6 +33,8 @@ func (s *shellSession) showContextReport(args []string) error {
 	switch scope {
 	case "project", "root":
 		return s.showReport()
+	case "risky", "risk", "seams", "seam", "hotspots", "hotspot", "hot", "low-tested", "lowtested", "low_tests", "changed-since", "changedsince", "changed", "changes":
+		return s.showReportScope(scope)
 	case "entity", "symbol":
 		return s.showEntityReport(rest)
 	case "file":
@@ -87,6 +89,14 @@ func (s *shellSession) renderEntityReport(view storage.SymbolView) error {
 	if err := s.writeCurrentSymbolSummary(view); err != nil {
 		return err
 	}
+	riskSummary, err := s.symbolJourneyRiskSummary(view)
+	if err != nil {
+		return err
+	}
+	testGuidance, err := buildSymbolTestGuidance(s.store, view, 6)
+	if err != nil {
+		return err
+	}
 
 	localDeps := strings.Join(shortenValues(s.info.ModulePath, limitStrings(view.Package.LocalDeps, 5)), ", ")
 	if localDeps == "" {
@@ -99,7 +109,7 @@ func (s *shellSession) renderEntityReport(view storage.SymbolView) error {
 
 	if _, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  %s %s\n  %s %s\n  %s %s\n  %s callers=%d  callees=%d  refs_in=%d  refs_out=%d  tests=%d  coverage=%s\n  %s local_deps=%d  reverse_deps=%d\n",
+		"%s\n  %s %s\n  %s %s\n  %s %s\n  %s callers=%d  callees=%d  refs_in=%d  refs_out=%d  tests=%d  coverage=%s\n  %s %s\n  %s local_deps=%d  reverse_deps=%d\n",
 		s.palette.section("Contract"),
 		s.palette.label("Package:"),
 		shortenQName(s.info.ModulePath, view.Symbol.PackageImportPath),
@@ -114,10 +124,15 @@ func (s *shellSession) renderEntityReport(view storage.SymbolView) error {
 		len(view.ReferencesOut),
 		len(view.Tests),
 		s.palette.muted("n/a"),
+		s.palette.label("Test signal:"),
+		testGuidance.Signal,
 		s.palette.label("Reach:"),
 		len(view.Package.LocalDeps),
 		len(view.Package.ReverseDeps),
 	); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(s.stdout, "  %s %s\n", s.palette.label("Risk:"), riskSummary); err != nil {
 		return err
 	}
 	if doc := oneLine(view.Symbol.Doc); doc != "" {
@@ -142,7 +157,7 @@ func (s *shellSession) renderEntityReport(view storage.SymbolView) error {
 	if err := s.renderRelatedPreview("Top Callees", view.Callees, 4); err != nil {
 		return err
 	}
-	if err := s.renderTestsPreview("Top Tests", view.Tests, 3); err != nil {
+	if err := s.renderTestsPreview("Tests To Read Before Change", testGuidance, 3); err != nil {
 		return err
 	}
 	if err := s.renderSiblingPreview("In This File", view.Siblings, 4); err != nil {
@@ -181,11 +196,10 @@ func (s *shellSession) showFileReport(query string) error {
 	if err != nil {
 		return err
 	}
-	summaries, err := s.store.LoadFileSummaries()
+	summary, err := s.store.LoadFileSummary(relPath)
 	if err != nil {
 		return err
 	}
-	summary := summaries[relPath]
 
 	s.currentMode = "file"
 	s.currentFile = relPath
@@ -256,10 +270,15 @@ func (s *shellSession) renderFileReport(relPath, focusSymbolKey string, entries 
 			types++
 		}
 	}
+	hotScore, recentChanged, err := s.fileRiskSignals(relPath, 0)
+	if err != nil {
+		return err
+	}
+	riskSummary := fileRiskSummary(summary, hotScore, recentChanged)
 
 	if _, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  %s %s %s\n  %s symbols=%d  funcs=%d  methods=%d  types=%d  tests=%d  test-link=%s\n  %s ranked by callers + refs + tests + reverse deps\n\n",
+		"%s\n  %s %s %s\n  %s symbols=%d  funcs=%d  methods=%d  types=%d  tests=%d  test-link=%s\n  %s %s\n  %s ranked by callers + refs + tests + reverse deps\n\n",
 		s.palette.section("File Report"),
 		s.palette.label("File:"),
 		relPath,
@@ -271,6 +290,8 @@ func (s *shellSession) renderFileReport(relPath, focusSymbolKey string, entries 
 		types,
 		max(tests, summary.DeclaredTestCount),
 		s.coverageBadge(coveragePercent(summary.TestLinkedSymbolCount, summary.RelevantSymbolCount)),
+		s.palette.label("Risk:"),
+		riskSummary,
 		s.palette.label("Importance:"),
 	); err != nil {
 		return err

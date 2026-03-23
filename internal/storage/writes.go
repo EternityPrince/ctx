@@ -18,10 +18,7 @@ func insertFiles(tx *sql.Tx, snapshotID int64, modulePath, root string, scanned 
 	defer stmt.Close()
 
 	for _, file := range scanned {
-		pkg := ""
-		if file.IsGo {
-			pkg = derivePackageForFile(root, modulePath, file.RelPath)
-		}
+		pkg := derivePackageForFile(root, modulePath, file.RelPath)
 		if _, err := stmt.Exec(snapshotID, file.RelPath, pkg, file.Hash, file.SizeBytes, boolInt(file.IsTest)); err != nil {
 			return fmt.Errorf("insert file %s: %w", file.RelPath, err)
 		}

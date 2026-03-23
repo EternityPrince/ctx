@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/vladimirkasterin/ctx/internal/codebase"
+	"github.com/vladimirkasterin/ctx/internal/filter"
 )
 
 func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
@@ -18,13 +19,12 @@ func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			return filter.HandleWalkError(path, walkErr)
 		}
 
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "vendor":
-				if path != root {
+			if path != root {
+				if skip, _ := filter.SkipDirectory(path, d.Name(), false); skip {
 					return filepath.SkipDir
 				}
 			}

@@ -11,6 +11,19 @@ import (
 )
 
 func runSnapshots(command cli.Command, stdout io.Writer) error {
+	switch command.SnapshotsVerb {
+	case "", "list":
+		return runSnapshotsList(command, stdout)
+	case "rm":
+		return runSnapshotsRemove(command, stdout)
+	case "limit":
+		return runSnapshotsLimit(command, stdout)
+	default:
+		return fmt.Errorf("unsupported snapshots subcommand %q", command.SnapshotsVerb)
+	}
+}
+
+func runSnapshotsList(command cli.Command, stdout io.Writer) error {
 	state, err := openPreparedProjectState(command)
 	if err != nil {
 		return err
@@ -37,6 +50,44 @@ func runSnapshots(command cli.Command, stdout io.Writer) error {
 	default:
 		return renderHumanSnapshots(stdout, state.Info.Root, state.Info.ModulePath, current.ID, snapshots)
 	}
+}
+
+func runSnapshotsRemove(command cli.Command, stdout io.Writer) error {
+	state, err := openPreparedProjectState(command)
+	if err != nil {
+		return err
+	}
+	defer state.Close()
+
+	if command.Query == "all" {
+		removed, err := state.Store.DeleteAllSnapshots()
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stdout, "Removed %d snapshot(s)\n", removed)
+		return err
+	}
+
+	removed, err := state.Store.DeleteSnapshots(command.SnapshotIDs)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "Removed %d snapshot(s)\n", removed)
+	return err
+}
+
+func runSnapshotsLimit(command cli.Command, stdout io.Writer) error {
+	state, err := openPreparedProjectState(command)
+	if err != nil {
+		return err
+	}
+	defer state.Close()
+
+	if err := state.Store.SetSnapshotLimit(command.SnapshotLimit); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "Snapshot limit set to %s\n", formatSnapshotLimit(command.SnapshotLimit))
+	return err
 }
 
 func runSnapshot(command cli.Command, stdout io.Writer) error {

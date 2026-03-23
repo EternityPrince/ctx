@@ -2,9 +2,6 @@ package app
 
 import (
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,50 +40,9 @@ func symbolBlockBounds(projectRoot string, symbol storage.SymbolMatch) (string, 
 	}
 
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, data, parser.ParseComments)
-	if err != nil {
-		start := max(1, symbol.Line-2)
-		end := min(len(lines), symbol.Line+12)
-		return path, start, end, lines, nil
-	}
-
-	start, end := 0, 0
-	ast.Inspect(file, func(node ast.Node) bool {
-		if start != 0 || node == nil {
-			return start == 0
-		}
-
-		switch value := node.(type) {
-		case *ast.FuncDecl:
-			if value.Name == nil || value.Name.Name != symbol.Name {
-				return true
-			}
-			line := fset.Position(value.Pos()).Line
-			if line != symbol.Line {
-				return true
-			}
-			start = nodeStartLine(fset, value.Doc, value.Pos())
-			end = fset.Position(value.End()).Line
-			return false
-		case *ast.TypeSpec:
-			if value.Name == nil || value.Name.Name != symbol.Name {
-				return true
-			}
-			line := fset.Position(value.Pos()).Line
-			if line != symbol.Line {
-				return true
-			}
-			start = nodeStartLine(fset, value.Doc, value.Pos())
-			end = fset.Position(value.End()).Line
-			return false
-		}
-		return true
-	})
-
+	start, end := locateSymbolRange(path, data, symbol)
 	if start == 0 || end == 0 || start > len(lines) {
-		start = max(1, symbol.Line-2)
-		end = min(len(lines), symbol.Line+12)
+		start, end = fallbackSymbolRange(len(lines), symbol.Line)
 	}
 	end = min(end, len(lines))
 	return path, start, end, lines, nil
@@ -131,11 +87,6 @@ func symbolRangeWithCountDisplay(projectRoot string, symbol storage.SymbolMatch)
 	return fmt.Sprintf("%s (%dL)", base, lineCount)
 }
 
-func nodeStartLine(fset *token.FileSet, doc *ast.CommentGroup, pos token.Pos) int {
-	if doc != nil {
-		if line := fset.Position(doc.Pos()).Line; line > 0 {
-			return line
-		}
-	}
-	return fset.Position(pos).Line
+func fallbackSymbolRange(totalLines, focusLine int) (int, int) {
+	return max(1, focusLine-2), min(totalLines, focusLine+12)
 }

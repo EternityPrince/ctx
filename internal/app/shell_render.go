@@ -15,10 +15,18 @@ func (s *shellSession) renderSymbolJourney(view storage.SymbolView) error {
 	if err := s.writeCurrentSymbolSummary(view); err != nil {
 		return err
 	}
+	riskSummary, err := s.symbolJourneyRiskSummary(view)
+	if err != nil {
+		return err
+	}
+	testGuidance, err := buildSymbolTestGuidance(s.store, view, 6)
+	if err != nil {
+		return err
+	}
 
 	if _, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  %s callers=%d  refs_in=%d  refs_out=%d  tests=%d  coverage=%s\n  %s local_deps=%d  reverse_deps=%d  file_symbols=%d\n\n",
+		"%s\n  %s callers=%d  refs_in=%d  refs_out=%d  tests=%d  coverage=%s\n  %s %s\n  %s %s\n  %s local_deps=%d  reverse_deps=%d  file_symbols=%d\n\n",
 		s.palette.section("Why It Matters"),
 		s.palette.label("Signals:"),
 		len(view.Callers),
@@ -26,6 +34,10 @@ func (s *shellSession) renderSymbolJourney(view storage.SymbolView) error {
 		len(view.ReferencesOut),
 		len(view.Tests),
 		s.palette.muted("n/a"),
+		s.palette.label("Risk:"),
+		riskSummary,
+		s.palette.label("Tests:"),
+		testGuidance.Signal,
 		s.palette.label("Area:"),
 		len(view.Package.LocalDeps),
 		len(view.Package.ReverseDeps),
@@ -67,7 +79,7 @@ func (s *shellSession) renderSymbolJourney(view storage.SymbolView) error {
 	if err := s.renderRelatedPreview("Callees", view.Callees, 4); err != nil {
 		return err
 	}
-	if err := s.renderTestsPreview("Tests", view.Tests, 3); err != nil {
+	if err := s.renderTestsPreview("Tests To Read Before Change", testGuidance, 3); err != nil {
 		return err
 	}
 
@@ -118,20 +130,34 @@ func (s *shellSession) renderRelatedPreview(title string, values []storage.Relat
 	return err
 }
 
-func (s *shellSession) renderTestsPreview(title string, tests []storage.TestView, limit int) error {
+func (s *shellSession) renderTestsPreview(title string, guidance symbolTestGuidance, limit int) error {
+	tests := guidance.ReadBefore
 	if _, err := fmt.Fprintf(s.stdout, "%s (%d)\n", s.palette.section(title), len(tests)); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintf(s.stdout, "  %s %s\n", s.palette.label("signal:"), guidance.Signal); err != nil {
+		return err
+	}
+	if guidance.ImportantWarning != "" {
+		if _, err := fmt.Fprintf(s.stdout, "  %s %s\n", s.palette.label("warning:"), guidance.ImportantWarning); err != nil {
+			return err
+		}
+	}
 	if len(tests) == 0 {
-		_, err := fmt.Fprintf(s.stdout, "  %s\n\n", s.palette.muted("coverage unavailable, no direct related tests indexed"))
+		_, err := fmt.Fprintf(s.stdout, "  %s\n\n", s.palette.muted("coverage unavailable, no strong direct or nearby tests indexed"))
 		return err
 	}
 	for _, test := range tests[:min(limit, len(tests))] {
-		if _, err := fmt.Fprintf(s.stdout, "  -> %s %s  [%s/%s]\n", s.palette.kindBadge(test.Kind), test.Name, test.LinkKind, test.Confidence); err != nil {
+		if _, err := fmt.Fprintf(s.stdout, "  -> %s %s  %s\n", s.palette.kindBadge(test.Kind), test.Name, formatTestRelationLabel(test)); err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintf(s.stdout, "     %s:%d\n", test.FilePath, test.Line); err != nil {
 			return err
+		}
+		if test.Why != "" {
+			if _, err := fmt.Fprintf(s.stdout, "     %s %s\n", s.palette.label("why:"), test.Why); err != nil {
+				return err
+			}
 		}
 	}
 	if len(tests) > limit {
@@ -143,8 +169,8 @@ func (s *shellSession) renderTestsPreview(title string, tests []storage.TestView
 	return err
 }
 
-func (s *shellSession) renderFileJourney(filePath, focusSymbolKey string, symbols []storage.SymbolMatch, summary storage.FileSummary, entries []fileReportEntry) error {
-	if err := s.renderFileJourneyOverview(filePath, focusSymbolKey, summary, entries); err != nil {
+func (s *shellSession) renderFileJourney(filePath, focusSymbolKey string, symbols []storage.SymbolMatch, summary storage.FileSummary, focusView *storage.SymbolView) error {
+	if err := s.renderFileJourneyOverview(filePath, focusSymbolKey, symbols, summary, focusView); err != nil {
 		return err
 	}
 
@@ -221,14 +247,10 @@ func (s *shellSession) renderFileJourney(filePath, focusSymbolKey string, symbol
 		return err
 	}
 
-	focus := symbols[0]
-	for _, symbol := range symbols {
-		if symbol.SymbolKey == focusSymbolKey {
-			focus = symbol
-			break
-		}
+	if focusView == nil {
+		return nil
 	}
-	preview, err := renderSymbolSource(s.info.Root, s.batPath, focus, 20, s.palette.enabled)
+	preview, err := renderSymbolSource(s.info.Root, s.batPath, focusView.Symbol, 20, s.palette.enabled)
 	if err != nil {
 		return err
 	}
@@ -242,77 +264,50 @@ func (s *shellSession) renderFileJourney(filePath, focusSymbolKey string, symbol
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-func (s *shellSession) renderFileJourneyOverview(filePath, focusSymbolKey string, summary storage.FileSummary, entries []fileReportEntry) error {
-	totalScore := 0
-	totalCallers := 0
-	totalRefsIn := 0
-	totalRefsOut := 0
-	strongSymbols := 0
-	packageLocalDeps := 0
-	packageReverseDeps := 0
-	funcLines := 0
-	funcCount := 0
-	methodLines := 0
-	methodCount := 0
-	typeLines := 0
-	typeCount := 0
-
-	for _, entry := range entries {
-		totalScore += entry.Score
-		totalCallers += len(entry.View.Callers)
-		totalRefsIn += len(entry.View.ReferencesIn)
-		totalRefsOut += len(entry.View.ReferencesOut)
-		if reportImportance(entry.Score) != "low" {
-			strongSymbols++
-		}
-		if packageLocalDeps == 0 && packageReverseDeps == 0 {
-			packageLocalDeps = len(entry.View.Package.LocalDeps)
-			packageReverseDeps = len(entry.View.Package.ReverseDeps)
-		}
-		lineCount := symbolLineCount(s.info.Root, entry.View.Symbol)
-		switch entry.View.Symbol.Kind {
-		case "func":
-			funcLines += lineCount
-			funcCount++
-		case "method":
-			methodLines += lineCount
-			methodCount++
-		case "struct", "interface", "type", "alias":
-			typeLines += lineCount
-			typeCount++
-		}
-	}
-
+func (s *shellSession) renderFileJourneyOverview(filePath, focusSymbolKey string, symbols []storage.SymbolMatch, summary storage.FileSummary, focusView *storage.SymbolView) error {
 	packageName := shortenQName(s.info.ModulePath, summary.PackageImportPath)
-	if packageName == "" && len(entries) > 0 {
-		packageName = shortenQName(s.info.ModulePath, entries[0].View.Symbol.PackageImportPath)
+	if packageName == "" && focusView != nil {
+		packageName = shortenQName(s.info.ModulePath, focusView.Symbol.PackageImportPath)
 	}
 	if packageName == "" {
 		packageName = s.palette.muted("unknown")
 	}
 
-	fileImportance := reportImportance(totalScore)
-	if len(entries) == 0 {
-		fileImportance = "LOW"
-	}
-
+	fileImportance := "low"
+	totalCallers := 0
+	totalRefsIn := 0
+	totalRefsOut := 0
+	packageLocalDeps := 0
+	packageReverseDeps := 0
 	hotspots := s.palette.muted("none yet")
-	if len(entries) > 0 {
+	riskSummary := "contained"
+	if len(symbols) > 0 {
 		var parts []string
-		for _, entry := range entries[:min(3, len(entries))] {
-			parts = append(parts, fmt.Sprintf("%s[%s]", entry.View.Symbol.Name, reportImportance(entry.Score)))
+		for _, symbol := range symbols[:min(3, len(symbols))] {
+			parts = append(parts, fmt.Sprintf("%s[%s]", symbol.Name, symbol.Kind))
 		}
 		hotspots = s.palette.accent(strings.Join(parts, ", "))
 	}
 
 	focus := s.palette.muted("first symbol in file")
-	if focusSymbolKey != "" {
-		for _, symbol := range entries {
-			if symbol.View.Symbol.SymbolKey == focusSymbolKey {
-				focus = s.palette.accent(shortenQName(s.info.ModulePath, symbol.View.Symbol.QName))
+	if focusView != nil {
+		fileImportance = impactLabel(len(focusView.Callers), len(focusView.ReferencesIn), len(focusView.Tests), len(focusView.Package.ReverseDeps))
+		totalCallers = len(focusView.Callers)
+		totalRefsIn = len(focusView.ReferencesIn)
+		totalRefsOut = len(focusView.ReferencesOut)
+		packageLocalDeps = len(focusView.Package.LocalDeps)
+		packageReverseDeps = len(focusView.Package.ReverseDeps)
+		focus = s.palette.accent(shortenQName(s.info.ModulePath, focusView.Symbol.QName))
+	} else if focusSymbolKey != "" {
+		for _, symbol := range symbols {
+			if symbol.SymbolKey == focusSymbolKey {
+				focus = s.palette.accent(shortenQName(s.info.ModulePath, symbol.QName))
 				break
 			}
 		}
+	}
+	if hotScore, recentChanged, err := s.fileRiskSignals(filePath, 0); err == nil {
+		riskSummary = fileRiskSummary(summary, hotScore, recentChanged)
 	}
 
 	if _, err := fmt.Fprintf(s.stdout, "%s\n", s.palette.section("Why It Matters")); err != nil {
@@ -325,32 +320,42 @@ func (s *shellSession) renderFileJourneyOverview(filePath, focusSymbolKey string
 		return err
 	}
 	if err := s.writeFileJourneyRow(
-		fmt.Sprintf("%s symbols=%d  fn=%d  methods=%d  structs=%d", s.palette.label("Shape:"), summary.SymbolCount, summary.FuncCount, summary.MethodCount, summary.StructCount),
+		fmt.Sprintf("%s symbols=%d  fn=%d  methods=%d  types=%d", s.palette.label("Shape:"), summary.SymbolCount, summary.FuncCount, summary.MethodCount, summary.StructCount),
 		fmt.Sprintf("%s tests=%d  link=%s", s.palette.label("Test map:"), max(summary.DeclaredTestCount, summary.RelatedTestCount), s.coverageBadge(coveragePercent(summary.TestLinkedSymbolCount, summary.RelevantSymbolCount))),
 	); err != nil {
 		return err
 	}
 	if err := s.writeFileJourneyRow(
-		fmt.Sprintf("%s %s  strong=%d", s.palette.label("Importance:"), s.palette.badge(fileImportance), strongSymbols),
+		fmt.Sprintf("%s %s", s.palette.label("Importance:"), s.palette.badge(fileImportance)),
 		fmt.Sprintf("%s callers=%d  refs_in=%d  refs_out=%d", s.palette.label("Signals:"), totalCallers, totalRefsIn, totalRefsOut),
 	); err != nil {
 		return err
 	}
 	if err := s.writeFileJourneyRow(
 		fmt.Sprintf("%s local_deps=%d  reverse_deps=%d", s.palette.label("Reach:"), packageLocalDeps, packageReverseDeps),
+		fmt.Sprintf("%s %s", s.palette.label("Risk:"), riskSummary),
+	); err != nil {
+		return err
+	}
+	if err := s.writeFileJourneyRow(
 		fmt.Sprintf("%s %s", s.palette.label("Hotspots:"), hotspots),
-	); err != nil {
-		return err
-	}
-	if err := s.writeFileJourneyRow(
-		fmt.Sprintf("%s fn=%s  method=%s  type=%s", s.palette.label("Avg length:"), averageLineLabel(funcLines, funcCount), averageLineLabel(methodLines, methodCount), averageLineLabel(typeLines, typeCount)),
-		fmt.Sprintf("%s size=%s", s.palette.label("Footprint:"), shellHumanSize(summary.SizeBytes)),
-	); err != nil {
-		return err
-	}
-	if err := s.writeFileJourneyRow(
 		fmt.Sprintf("%s %s", s.palette.label("Focus:"), focus),
+	); err != nil {
+		return err
+	}
+	if err := s.writeFileJourneyRow(
+		fmt.Sprintf("%s size=%s", s.palette.label("Footprint:"), shellHumanSize(summary.SizeBytes)),
 		fmt.Sprintf("%s %s / %s / %s / %s", s.palette.label("Explore:"), s.palette.accent("walk"), s.palette.accent("source <n>"), s.palette.accent("full <n>"), s.palette.accent("full")),
+	); err != nil {
+		return err
+	}
+	previewState := s.palette.muted("open a symbol to preview")
+	if focusView != nil {
+		previewState = s.palette.accent("focused body ready below")
+	}
+	if err := s.writeFileJourneyRow(
+		fmt.Sprintf("%s %s", s.palette.label("Preview:"), previewState),
+		"",
 	); err != nil {
 		return err
 	}

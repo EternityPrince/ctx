@@ -3,7 +3,6 @@ package project
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,53 +10,6 @@ import (
 )
 
 const envHome = "CTX_HOME"
-
-type Info struct {
-	Root       string
-	ModulePath string
-	GoVersion  string
-	ID         string
-	DBPath     string
-}
-
-func Resolve(path string) (Info, error) {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return Info{}, fmt.Errorf("resolve path: %w", err)
-	}
-
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return Info{}, fmt.Errorf("stat path: %w", err)
-	}
-	if !info.IsDir() {
-		absPath = filepath.Dir(absPath)
-	}
-
-	moduleRoot, goModPath, err := findModuleRoot(absPath)
-	if err != nil {
-		return Info{}, err
-	}
-
-	modulePath, goVersion, err := parseGoMod(goModPath)
-	if err != nil {
-		return Info{}, err
-	}
-
-	projectID := ProjectID(moduleRoot)
-	dbPath, err := DBPath(projectID)
-	if err != nil {
-		return Info{}, err
-	}
-
-	return Info{
-		Root:       moduleRoot,
-		ModulePath: modulePath,
-		GoVersion:  goVersion,
-		ID:         projectID,
-		DBPath:     dbPath,
-	}, nil
-}
 
 func ProjectID(root string) string {
 	sum := sha256.Sum256([]byte(filepath.Clean(root)))
@@ -140,50 +92,4 @@ func ProjectDir(projectID string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(projectsRoot, projectID), nil
-}
-
-func findModuleRoot(start string) (string, string, error) {
-	current := start
-	for {
-		goModPath := filepath.Join(current, "go.mod")
-		if _, err := os.Stat(goModPath); err == nil {
-			return current, goModPath, nil
-		}
-
-		parent := filepath.Dir(current)
-		if parent == current {
-			break
-		}
-		current = parent
-	}
-
-	return "", "", errors.New("go.mod not found from the provided path")
-}
-
-func parseGoMod(path string) (string, string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", "", fmt.Errorf("read go.mod: %w", err)
-	}
-
-	var modulePath string
-	var goVersion string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "//") {
-			continue
-		}
-		if strings.HasPrefix(line, "module ") {
-			modulePath = strings.TrimSpace(strings.TrimPrefix(line, "module "))
-			continue
-		}
-		if strings.HasPrefix(line, "go ") {
-			goVersion = strings.TrimSpace(strings.TrimPrefix(line, "go "))
-		}
-	}
-
-	if modulePath == "" {
-		return "", "", errors.New("module path not found in go.mod")
-	}
-	return modulePath, goVersion, nil
 }

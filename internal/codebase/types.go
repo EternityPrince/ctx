@@ -1,8 +1,10 @@
 package codebase
 
 import (
+	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 type ScanFile struct {
@@ -76,11 +78,58 @@ func ScanMap(scanned []ScanFile) map[string]ScanFile {
 }
 
 func PackageImportPath(modulePath, relPath string) string {
+	if IsPythonFile(relPath) {
+		return PythonPackageImportPath(modulePath, relPath)
+	}
 	dir := filepath.Dir(relPath)
 	if dir == "." {
 		return modulePath
 	}
 	return modulePath + "/" + filepath.ToSlash(dir)
+}
+
+func PythonPackageImportPath(modulePath, relPath string) string {
+	parts := pythonImportParts(relPath)
+	if len(parts) == 0 {
+		return modulePath
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return strings.Join(parts[:len(parts)-1], ".")
+}
+
+func PythonModuleImportPath(modulePath, relPath string) string {
+	parts := pythonImportParts(relPath)
+	if len(parts) == 0 {
+		return modulePath
+	}
+	return strings.Join(parts, ".")
+}
+
+func pythonImportParts(relPath string) []string {
+	clean := path.Clean(filepath.ToSlash(relPath))
+	clean = strings.TrimPrefix(clean, "./")
+	clean = strings.TrimPrefix(clean, "src/")
+	clean = strings.TrimSuffix(clean, ".py")
+	if clean == "" || clean == "." {
+		return nil
+	}
+
+	parts := strings.Split(clean, "/")
+	if len(parts) > 0 && parts[len(parts)-1] == "__init__" {
+		parts = parts[:len(parts)-1]
+	}
+
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || part == "." {
+			continue
+		}
+		result = append(result, part)
+	}
+	return result
 }
 
 type Result struct {

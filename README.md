@@ -1,6 +1,6 @@
 # ctx
 
-`ctx` is a local Go code-intelligence CLI for understanding a project as a system.
+`ctx` is a local Go and Python code-intelligence CLI for understanding a project as a system.
 
 Give it a repository and it helps you explore in flow:
 
@@ -58,14 +58,14 @@ The tool is optimized for:
 
 ## What `ctx` Gives You
 
-`ctx` indexes a Go project locally and keeps the result in a persistent SQLite-backed store.
+`ctx` indexes a Go project, a Python project, or a mixed repository locally and keeps the result in a persistent SQLite-backed store.
 
 It can:
 
-- build an index from the current Go project
+- build an index from the current Go, Python, or mixed project
 - detect changes since the previous snapshot
 - update the index incrementally
-- query functions, methods, structs, interfaces, files, and packages
+- query functions, methods, structs, interfaces, classes, files, and packages
 - show signatures, declaration ranges, doc comments, callers, callees, refs, related symbols, and tests
 - estimate impact surface
 - compare snapshots
@@ -80,7 +80,14 @@ The experience is built around a few strong flows.
 ```bash
 ctx index .
 ctx report .
-ctx tree
+ctx shell
+```
+
+Then inside the shell:
+
+```text
+tree dirs
+open 1
 ```
 
 ### 2. Inspect one symbol deeply
@@ -111,7 +118,12 @@ ctx shell
 From there you can move naturally:
 
 - `tree`
+- `tree dirs`
+- `tree hot`
 - `file internal/app/app.go`
+- `search Login`
+- `find session token`
+- `grep 'Run\\('`
 - `walk`
 - `open 4`
 - `callers`
@@ -196,6 +208,15 @@ Enter the shell:
 
 ```bash
 ctx shell
+```
+
+Choose an area first when the repository is large:
+
+```text
+tree dirs
+open 3
+tree hot
+search text refresh token
 ```
 
 ## Commands
@@ -343,7 +364,14 @@ Optimized for:
 Useful commands inside the shell:
 
 - `tree`
+- `tree dirs`
+- `tree hot`
+- `tree up`
+- `tree root`
 - `file [path|n]`
+- `search [symbol|text|regex] <query>`
+- `find <query>`
+- `grep <regex>`
 - `walk`
 - `callers`
 - `callees`
@@ -361,11 +389,16 @@ Useful commands inside the shell:
 
 The shell is designed around movement:
 
-- project -> file
+- project -> directory -> file
 - file -> entity
 - entity -> callers/callees/refs/tests
 - entity -> full body
 - back out when needed
+
+Two details matter on large repositories:
+
+- `tree dirs` gives you directory summaries with file-type counts like `py=12`, `go=8`, `md=3`
+- plain text at the shell prompt runs the smart search flow, so you do not have to remember exact symbol names first
 
 It should feel closer to exploring a system than manually opening random files in an editor tab maze.
 
@@ -382,7 +415,7 @@ This is the heart of the tool: not just “show me code”, but “help me under
 
 ## Technical Notes
 
-Today `ctx` is focused on Go and uses a local persistent index built from the repository itself.
+Today `ctx` is focused on Go and Python and uses a local persistent index built from the repository itself.
 
 At a high level it relies on:
 
@@ -391,6 +424,7 @@ At a high level it relies on:
 - `go/token`
 - `go/types`
 - `go/packages`
+- Python's built-in `ast` module through a bundled local analyzer
 - SQLite for local storage and snapshots
 
 The important point is not the implementation detail, but the product behavior:
@@ -400,21 +434,25 @@ The important point is not the implementation detail, but the product behavior:
 - snapshot history
 - queryable project graph
 
+For Python analysis, `python3` needs to be available on your `PATH`.
+
 ## Current Scope
 
 Current focus:
 
 - local Go projects
+- local Python projects
+- mixed Go + Python repositories
 - CLI-first workflows
 - human shell exploration
 - persistent project intelligence without a server
 
-Not the goal right now:
+Known limitations:
 
 - web UI
 - mandatory AI dependency
 - distributed indexing platform
-- multi-language platform from day one
+- perfect Python type inference or runtime-aware dataflow
 
 ## Example Reading Session
 
@@ -426,14 +464,15 @@ ctx shell
 Then inside the shell:
 
 ```text
-tree
+tree dirs
+open 2
 file internal/app/app.go
 walk
 next
 full
-open-current
 callers
-impact
+search text refresh token
+tree hot
 back
 home
 ```
@@ -467,12 +506,17 @@ The next meaningful improvements are likely to be:
 - stronger package-level travel
 - better test/coverage integration
 - denser shell layouts for big files
+- more precise Python relationship recovery for dynamic flows
 - more precise ranking of entrypoints vs helpers
 - additional AI overlays for explanation on top of the deterministic core
 
 But the foundation stays the same:
 
 the main value of `ctx` should come from the tool itself, not from attaching a model to it.
+
+## FAQ
+
+Practical questions about Python support, smart search, big trees, and snapshot behavior live in [FAQ.md](FAQ.md).
 
 ## Summary
 

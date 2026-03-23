@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -22,7 +23,10 @@ type funcRegion struct {
 
 func (a *Adapter) Analyze(info project.Info, scanned map[string]codebase.ScanFile, patterns []string) (*codebase.Result, error) {
 	if len(patterns) == 0 {
-		patterns = []string{"./..."}
+		patterns = defaultLoadPatterns(scanned)
+	}
+	if len(patterns) == 0 {
+		return nil, fmt.Errorf("no buildable Go packages found")
 	}
 
 	cfg := &packages.Config{
@@ -40,8 +44,8 @@ func (a *Adapter) Analyze(info project.Info, scanned map[string]codebase.ScanFil
 	if err != nil {
 		return nil, fmt.Errorf("load packages: %w", err)
 	}
-	if packages.PrintErrors(pkgs) > 0 {
-		return nil, fmt.Errorf("package loading returned errors")
+	if err := localPackageLoadError(pkgs, info.Root, info.ModulePath); err != nil {
+		return nil, err
 	}
 
 	result := &codebase.Result{
@@ -116,41 +120,53 @@ func (a *Adapter) Analyze(info project.Info, scanned map[string]codebase.ScanFil
 	result.Tests = tests
 	result.TestLinks = links
 
-	sort.Slice(result.Packages, func(i, j int) bool {
-		return result.Packages[i].ImportPath < result.Packages[j].ImportPath
-	})
-	sort.Slice(result.Files, func(i, j int) bool {
-		return result.Files[i].RelPath < result.Files[j].RelPath
-	})
-	sort.Slice(result.Symbols, func(i, j int) bool {
-		return result.Symbols[i].QName < result.Symbols[j].QName
-	})
-	sort.Slice(result.References, func(i, j int) bool {
-		if result.References[i].ToSymbolKey == result.References[j].ToSymbolKey {
-			if result.References[i].FilePath == result.References[j].FilePath {
-				return result.References[i].Line < result.References[j].Line
-			}
-			return result.References[i].FilePath < result.References[j].FilePath
-		}
-		return result.References[i].ToSymbolKey < result.References[j].ToSymbolKey
-	})
-	sort.Slice(result.Calls, func(i, j int) bool {
-		if result.Calls[i].CallerSymbolKey == result.Calls[j].CallerSymbolKey {
-			return result.Calls[i].CalleeSymbolKey < result.Calls[j].CalleeSymbolKey
-		}
-		return result.Calls[i].CallerSymbolKey < result.Calls[j].CallerSymbolKey
-	})
-	sort.Slice(result.Tests, func(i, j int) bool {
-		return result.Tests[i].TestKey < result.Tests[j].TestKey
-	})
-	sort.Slice(result.TestLinks, func(i, j int) bool {
-		if result.TestLinks[i].TestKey == result.TestLinks[j].TestKey {
-			return result.TestLinks[i].SymbolKey < result.TestLinks[j].SymbolKey
-		}
-		return result.TestLinks[i].TestKey < result.TestLinks[j].TestKey
-	})
-
+	codebase.SortResult(result)
 	return result, nil
+}
+
+func defaultLoadPatterns(scanned map[string]codebase.ScanFile) []string {
+	patternsByPath := make(map[string]struct{})
+	for _, file := range scanned {
+		if !file.IsGo || file.IsTest {
+			continue
+		}
+		dir := filepath.ToSlash(filepath.Dir(file.RelPath))
+		pattern := "."
+		if dir != "." {
+			pattern = "./" + dir
+		}
+		patternsByPath[pattern] = struct{}{}
+	}
+
+	patterns := make([]string, 0, len(patternsByPath))
+	for pattern := range patternsByPath {
+		patterns = append(patterns, pattern)
+	}
+	sort.Strings(patterns)
+	return patterns
+}
+
+func localPackageLoadError(pkgs []*packages.Package, root, modulePath string) error {
+	for _, pkg := range pkgs {
+		if !isLocalPackage(pkg, root, modulePath) {
+			continue
+		}
+		if len(pkg.Errors) == 0 {
+			continue
+		}
+		return fmt.Errorf("package loading returned errors: %s", pkg.Errors[0].Msg)
+	}
+	return nil
+}
+
+func declaredFuncIdentity(fn *types.Func, relFile string, line, column int) (string, string, string, string) {
+	key, qname, kind, receiver := symbolIdentityFromFunc(fn)
+	if fn == nil || fn.Name() != "init" {
+		return key, qname, kind, receiver
+	}
+
+	suffix := fmt.Sprintf("|%s|%d|%d", relFile, line, column)
+	return key + suffix, qname + suffix, kind, receiver
 }
 
 func extractSymbolsFromFile(pkg *packages.Package, fileAST *ast.File, relFile string, objectKeys map[types.Object]string) ([]codebase.SymbolFact, []funcRegion) {
@@ -165,8 +181,8 @@ func extractSymbolsFromFile(pkg *packages.Package, fileAST *ast.File, relFile st
 				continue
 			}
 
-			symbolKey, qname, kind, receiver := symbolIdentityFromFunc(obj)
 			pos := pkg.Fset.Position(d.Pos())
+			symbolKey, qname, kind, receiver := declaredFuncIdentity(obj, relFile, pos.Line, pos.Column)
 			symbols = append(symbols, codebase.SymbolFact{
 				SymbolKey:         symbolKey,
 				QName:             qname,

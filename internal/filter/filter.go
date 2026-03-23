@@ -2,11 +2,15 @@ package filter
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 )
 
-var ignoredDirectories = map[string]struct{}{
+var ignoredDirectoryNames = map[string]struct{}{
 	".git":         {},
 	".hg":          {},
 	".svn":         {},
@@ -16,11 +20,20 @@ var ignoredDirectories = map[string]struct{}{
 	"vendor":       {},
 }
 
-func SkipDirectory(name string, includeHidden bool) (bool, string) {
+var ignoredDirectoryPaths = []string{
+	".Trash",
+	"Library",
+	"go/pkg/mod",
+}
+
+func SkipDirectory(path, name string, includeHidden bool) (bool, string) {
+	if matchesIgnoredDirectoryPath(path) {
+		return true, "ignored directory path"
+	}
 	if !includeHidden && strings.HasPrefix(name, ".") {
 		return true, "hidden directory"
 	}
-	if _, ok := ignoredDirectories[name]; ok {
+	if _, ok := ignoredDirectoryNames[name]; ok {
 		return true, "ignored directory"
 	}
 	return false, ""
@@ -61,4 +74,50 @@ func IsLikelyBinary(data []byte) bool {
 	}
 
 	return float64(suspicious)/float64(len(sample)) > 0.08
+}
+
+func HandleWalkError(path string, walkErr error) error {
+	if walkErr == nil {
+		return nil
+	}
+	if matchesIgnoredDirectoryPath(path) {
+		return filepath.SkipDir
+	}
+	if errors.Is(walkErr, fs.ErrPermission) || errors.Is(walkErr, os.ErrPermission) {
+		return filepath.SkipDir
+	}
+	return walkErr
+}
+
+func matchesIgnoredDirectoryPath(path string) bool {
+	if path == "" {
+		return false
+	}
+
+	cleanPath := filepath.Clean(path)
+	for _, ignored := range IgnoredDirectoryPaths() {
+		if ignored == "" {
+			continue
+		}
+		if cleanPath == ignored {
+			return true
+		}
+		if strings.HasPrefix(cleanPath, ignored+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func IgnoredDirectoryPaths() []string {
+	paths := make([]string, 0, len(ignoredDirectoryPaths))
+	homeDir, err := os.UserHomeDir()
+	for _, ignored := range ignoredDirectoryPaths {
+		value := ignored
+		if homeDir != "" && err == nil && !filepath.IsAbs(ignored) {
+			value = filepath.Join(homeDir, ignored)
+		}
+		paths = append(paths, filepath.Clean(value))
+	}
+	return paths
 }
