@@ -1,5 +1,5 @@
-def python_package_import_path(project_name, rel_path):
-    parts = python_import_parts(rel_path)
+def python_package_import_path(project_name, rel_path, source_roots=None):
+    parts = python_import_parts(rel_path, source_roots)
     if not parts:
         return project_name
     if len(parts) == 1:
@@ -7,17 +7,16 @@ def python_package_import_path(project_name, rel_path):
     return ".".join(parts[:-1])
 
 
-def python_module_import_path(project_name, rel_path):
-    parts = python_import_parts(rel_path)
+def python_module_import_path(project_name, rel_path, source_roots=None):
+    parts = python_import_parts(rel_path, source_roots)
     if not parts:
         return project_name
     return ".".join(parts)
 
 
-def python_import_parts(rel_path):
+def python_import_parts(rel_path, source_roots=None):
     rel_path = rel_path.replace("\\", "/")
-    if rel_path.startswith("src/"):
-        rel_path = rel_path[4:]
+    rel_path = trim_python_source_root(rel_path, source_roots or ["src"])
     if rel_path.endswith(".py"):
         rel_path = rel_path[:-3]
     parts = [part for part in rel_path.split("/") if part and part != "."]
@@ -26,10 +25,30 @@ def python_import_parts(rel_path):
     return parts
 
 
-def normalize_module_name(name, module_to_package):
+def trim_python_source_root(rel_path, source_roots):
+    best = ""
+    for root in sorted(set(source_roots or []), key=lambda value: len(value), reverse=True):
+        root = (root or "").replace("\\", "/").strip()
+        root = root[2:] if root.startswith("./") else root
+        root = root.rstrip("/")
+        if not root:
+            continue
+        if rel_path == root or rel_path.startswith(root + "/"):
+            best = root
+            break
+    if not best:
+        return rel_path
+    if rel_path == best:
+        return ""
+    return rel_path[len(best) + 1 :]
+
+
+def normalize_module_name(name, module_to_package, module_prefixes=None):
     if not name:
         return ""
     if name in module_to_package:
+        return name
+    if name in (module_prefixes or set()):
         return name
     return ""
 

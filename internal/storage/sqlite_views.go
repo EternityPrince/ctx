@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 func (s *Store) FindPackages(query string) ([]PackageMatch, error) {
@@ -317,14 +318,456 @@ func (s *Store) LoadImpactView(symbolKey string, depth int) (ImpactView, error) 
 	if view.TransitiveCallers, err = s.loadTransitiveCallers(current.ID, symbolKey, depth); err != nil {
 		return ImpactView{}, err
 	}
+	if view.InboundRefs, err = s.loadReferences(current.ID, symbolKey, true); err != nil {
+		return ImpactView{}, err
+	}
 	if view.CallerPackages, err = s.loadImpactCallerPackages(current.ID, symbolKey, depth); err != nil {
 		return ImpactView{}, err
 	}
+	view.CallerPackageReasons = mergeImpactPackageReasons(
+		packageReasonsFromCallers(view.DirectCallers),
+		packageReasonsFromStaticList(view.CallerPackages, "transitive caller package in local call graph"),
+	)
+	view.ReferencePackageReasons = packageReasonsFromRefs(view.InboundRefs)
+	view.CallerPackages = packageReasonLabels(view.CallerPackageReasons)
+	view.ReferencePackages = packageReasonLabels(view.ReferencePackageReasons)
 	if view.Tests, err = s.loadTests(current.ID, symbolKey); err != nil {
 		return ImpactView{}, err
 	}
+	if cochange, coErr := s.SymbolCoChange(symbolKey, 5); coErr == nil {
+		view.EmpiricalFiles = cochange.Files
+		view.EmpiricalPackages = cochange.Packages
+	}
+	view.BlastPackageReasons = mergeImpactPackageReasons(
+		view.CallerPackageReasons,
+		view.ReferencePackageReasons,
+		packageReasonsFromReverseDeps(view.Package.ReverseDeps),
+		packageReasonsFromCoChange(view.EmpiricalPackages),
+	)
+	view.BlastPackages = packageReasonLabels(view.BlastPackageReasons)
+	view.BlastFileReasons = mergeImpactFileReasons(
+		fileReasonsFromCallers(view.DirectCallers),
+		fileReasonsFromRefs(view.InboundRefs),
+		fileReasonsFromTests(view.Tests),
+		fileReasonsFromCoChange(view.EmpiricalFiles),
+	)
+	view.BlastFiles = fileReasonLabels(view.BlastFileReasons)
+	if current.ParentID.Valid {
+		diff, diffErr := s.Diff(current.ParentID.Int64, current.ID)
+		if diffErr != nil {
+			return ImpactView{}, diffErr
+		}
+		if delta, ok := findSymbolImpactDelta(diff.ImpactedSymbols, view.Target.QName); ok {
+			view.RecentDelta = delta
+			view.HasRecentDelta = true
+		}
+	}
+	annotateImpactReasonsWithRecentDelta(&view)
+	view.ExpansionWhy = buildImpactExpansionWhy(view)
 
 	return view, nil
+}
+
+func findSymbolImpactDelta(values []SymbolImpactDelta, qname string) (SymbolImpactDelta, bool) {
+	for _, value := range values {
+		if value.QName == qname {
+			return value, true
+		}
+	}
+	return SymbolImpactDelta{}, false
+}
+
+func packagesFromRefs(values []RefView) []string {
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		if value.Symbol.PackageImportPath != "" {
+			items = append(items, value.Symbol.PackageImportPath)
+		}
+	}
+	return stableImpactStrings(items)
+}
+
+func packageReasonLabels(values []ImpactPackageReason) []string {
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		if value.PackageImportPath != "" {
+			items = append(items, value.PackageImportPath)
+		}
+	}
+	return stableImpactStrings(items)
+}
+
+func fileReasonLabels(values []ImpactFileReason) []string {
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		if value.FilePath != "" {
+			items = append(items, value.FilePath)
+		}
+	}
+	return stableImpactStrings(items)
+}
+
+func packageReasonsFromCallers(values []RelatedSymbolView) []ImpactPackageReason {
+	byPackage := make(map[string][]string)
+	for _, value := range values {
+		if value.Symbol.PackageImportPath == "" {
+			continue
+		}
+		reason := impactEvidenceWhy(value.Why, value.Symbol.QName, value.UseFilePath, value.UseLine)
+		appendImpactPackageWhy(byPackage, value.Symbol.PackageImportPath, reason)
+	}
+	return sortImpactPackageReasons(byPackage)
+}
+
+func packageReasonsFromRefs(values []RefView) []ImpactPackageReason {
+	byPackage := make(map[string][]string)
+	for _, value := range values {
+		if value.Symbol.PackageImportPath == "" {
+			continue
+		}
+		reason := impactEvidenceWhy(value.Why, value.Symbol.QName, value.UseFilePath, value.UseLine)
+		appendImpactPackageWhy(byPackage, value.Symbol.PackageImportPath, reason)
+	}
+	return sortImpactPackageReasons(byPackage)
+}
+
+func packageReasonsFromReverseDeps(values []string) []ImpactPackageReason {
+	return packageReasonsFromStaticList(values, "reverse package dependency in local graph")
+}
+
+func packageReasonsFromStaticList(values []string, why string) []ImpactPackageReason {
+	byPackage := make(map[string][]string)
+	for _, value := range values {
+		appendImpactPackageWhy(byPackage, value, why)
+	}
+	return sortImpactPackageReasons(byPackage)
+}
+
+func packageReasonsFromCoChange(values []CoChangeItem) []ImpactPackageReason {
+	byPackage := make(map[string][]string)
+	for _, value := range values {
+		if value.Label == "" {
+			continue
+		}
+		appendImpactPackageWhy(byPackage, value.Label, fmt.Sprintf("empirical co-change signal (count=%d freq=%.2f)", value.Count, value.Frequency))
+	}
+	return sortImpactPackageReasons(byPackage)
+}
+
+func mergeImpactPackageReasons(parts ...[]ImpactPackageReason) []ImpactPackageReason {
+	byPackage := make(map[string][]string)
+	for _, values := range parts {
+		for _, value := range values {
+			for _, why := range value.Why {
+				appendImpactPackageWhy(byPackage, value.PackageImportPath, why)
+			}
+		}
+	}
+	return sortImpactPackageReasons(byPackage)
+}
+
+func fileReasonsFromCallers(values []RelatedSymbolView) []ImpactFileReason {
+	byFile := make(map[string][]string)
+	for _, value := range values {
+		if value.UseFilePath == "" {
+			continue
+		}
+		reason := impactEvidenceWhy(value.Why, value.Symbol.QName, value.UseFilePath, value.UseLine)
+		appendImpactFileWhy(byFile, value.UseFilePath, reason)
+	}
+	return sortImpactFileReasons(byFile)
+}
+
+func fileReasonsFromRefs(values []RefView) []ImpactFileReason {
+	byFile := make(map[string][]string)
+	for _, value := range values {
+		if value.UseFilePath == "" {
+			continue
+		}
+		reason := impactEvidenceWhy(value.Why, value.Symbol.QName, value.UseFilePath, value.UseLine)
+		appendImpactFileWhy(byFile, value.UseFilePath, reason)
+	}
+	return sortImpactFileReasons(byFile)
+}
+
+func fileReasonsFromTests(values []TestView) []ImpactFileReason {
+	byFile := make(map[string][]string)
+	for _, value := range values {
+		if value.FilePath == "" {
+			continue
+		}
+		appendImpactFileWhy(byFile, value.FilePath, impactTestWhy(value))
+	}
+	return sortImpactFileReasons(byFile)
+}
+
+func fileReasonsFromCoChange(values []CoChangeItem) []ImpactFileReason {
+	byFile := make(map[string][]string)
+	for _, value := range values {
+		if value.Label == "" {
+			continue
+		}
+		appendImpactFileWhy(byFile, value.Label, fmt.Sprintf("empirical co-change signal (count=%d freq=%.2f)", value.Count, value.Frequency))
+	}
+	return sortImpactFileReasons(byFile)
+}
+
+func mergeImpactFileReasons(parts ...[]ImpactFileReason) []ImpactFileReason {
+	byFile := make(map[string][]string)
+	for _, values := range parts {
+		for _, value := range values {
+			for _, why := range value.Why {
+				appendImpactFileWhy(byFile, value.FilePath, why)
+			}
+		}
+	}
+	return sortImpactFileReasons(byFile)
+}
+
+func appendImpactPackageWhy(byPackage map[string][]string, pkg, why string) {
+	pkg = strings.TrimSpace(pkg)
+	why = strings.TrimSpace(why)
+	if pkg == "" || why == "" {
+		return
+	}
+	for _, existing := range byPackage[pkg] {
+		if existing == why {
+			return
+		}
+	}
+	byPackage[pkg] = append(byPackage[pkg], why)
+}
+
+func appendImpactFileWhy(byFile map[string][]string, filePath, why string) {
+	filePath = strings.TrimSpace(filePath)
+	why = strings.TrimSpace(why)
+	if filePath == "" || why == "" {
+		return
+	}
+	for _, existing := range byFile[filePath] {
+		if existing == why {
+			return
+		}
+	}
+	byFile[filePath] = append(byFile[filePath], why)
+}
+
+func sortImpactPackageReasons(byPackage map[string][]string) []ImpactPackageReason {
+	items := make([]ImpactPackageReason, 0, len(byPackage))
+	for pkg, why := range byPackage {
+		sort.Strings(why)
+		items = append(items, ImpactPackageReason{
+			PackageImportPath: pkg,
+			Why:               why,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].PackageImportPath < items[j].PackageImportPath
+	})
+	return items
+}
+
+func sortImpactFileReasons(byFile map[string][]string) []ImpactFileReason {
+	items := make([]ImpactFileReason, 0, len(byFile))
+	for filePath, why := range byFile {
+		sort.Strings(why)
+		items = append(items, ImpactFileReason{
+			FilePath: filePath,
+			Why:      why,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].FilePath < items[j].FilePath
+	})
+	return items
+}
+
+func impactEvidenceWhy(baseWhy, qname, filePath string, line int) string {
+	parts := make([]string, 0, 3)
+	if trimmed := strings.TrimSpace(baseWhy); trimmed != "" {
+		parts = append(parts, trimmed)
+	}
+	if trimmed := strings.TrimSpace(qname); trimmed != "" {
+		parts = append(parts, "via "+trimmed)
+	}
+	if trimmed := strings.TrimSpace(filePath); trimmed != "" && line > 0 {
+		parts = append(parts, fmt.Sprintf("@ %s:%d", trimmed, line))
+	}
+	return strings.Join(parts, " ")
+}
+
+func impactTestWhy(value TestView) string {
+	parts := make([]string, 0, 3)
+	if trimmed := strings.TrimSpace(value.Why); trimmed != "" {
+		parts = append(parts, trimmed)
+	}
+	if trimmed := strings.TrimSpace(value.Name); trimmed != "" {
+		parts = append(parts, "via "+trimmed)
+	}
+	if trimmed := strings.TrimSpace(value.FilePath); trimmed != "" && value.Line > 0 {
+		parts = append(parts, fmt.Sprintf("@ %s:%d", trimmed, value.Line))
+	}
+	return strings.Join(parts, " ")
+}
+
+func annotateImpactReasonsWithRecentDelta(view *ImpactView) {
+	if !view.HasRecentDelta {
+		return
+	}
+	delta := view.RecentDelta
+	if delta.AddedCallers+delta.RemovedCallers > 0 {
+		why := fmt.Sprintf("recent symbol delta changed caller surface (+%d/-%d)", delta.AddedCallers, delta.RemovedCallers)
+		appendRecentPackageWhy(view.CallerPackageReasons, why)
+		appendMatchingPackageWhy(view.BlastPackageReasons, why, "call edge", "caller package")
+		appendMatchingFileWhy(view.BlastFileReasons, why, "call edge")
+	}
+	if delta.AddedRefsIn+delta.RemovedRefsIn > 0 {
+		why := fmt.Sprintf("recent symbol delta changed inbound reference surface (+%d/-%d)", delta.AddedRefsIn, delta.RemovedRefsIn)
+		appendRecentPackageWhy(view.ReferencePackageReasons, why)
+		appendMatchingPackageWhy(view.BlastPackageReasons, why, "reference")
+		appendMatchingFileWhy(view.BlastFileReasons, why, "reference")
+	}
+	if delta.AddedTests+delta.RemovedTests > 0 {
+		why := fmt.Sprintf("recent symbol delta changed related test surface (+%d/-%d)", delta.AddedTests, delta.RemovedTests)
+		appendMatchingFileWhy(view.BlastFileReasons, why, "test")
+	}
+	view.CallerPackages = packageReasonLabels(view.CallerPackageReasons)
+	view.ReferencePackages = packageReasonLabels(view.ReferencePackageReasons)
+	view.BlastPackages = packageReasonLabels(view.BlastPackageReasons)
+	view.BlastFiles = fileReasonLabels(view.BlastFileReasons)
+}
+
+func appendRecentPackageWhy(values []ImpactPackageReason, why string) {
+	for idx := range values {
+		appendUniqueString(&values[idx].Why, why)
+	}
+}
+
+func appendMatchingPackageWhy(values []ImpactPackageReason, why string, markers ...string) {
+	for idx := range values {
+		if hasImpactReasonMarker(values[idx].Why, markers...) {
+			appendUniqueString(&values[idx].Why, why)
+		}
+	}
+}
+
+func appendMatchingFileWhy(values []ImpactFileReason, why string, markers ...string) {
+	for idx := range values {
+		if hasImpactReasonMarker(values[idx].Why, markers...) {
+			appendUniqueString(&values[idx].Why, why)
+		}
+	}
+}
+
+func appendUniqueString(values *[]string, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	for _, existing := range *values {
+		if existing == value {
+			return
+		}
+	}
+	*values = append(*values, value)
+}
+
+func hasImpactReasonMarker(values []string, markers ...string) bool {
+	for _, value := range values {
+		lower := strings.ToLower(value)
+		for _, marker := range markers {
+			if strings.Contains(lower, strings.ToLower(marker)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func buildImpactExpansionWhy(view ImpactView) []string {
+	var why []string
+	if len(view.TransitiveCallers) > len(view.DirectCallers) {
+		why = append(why, fmt.Sprintf("transitive callers widen upstream impact beyond %d direct caller(s)", len(view.DirectCallers)))
+	}
+	if len(view.Package.ReverseDeps) > 0 {
+		why = append(why, fmt.Sprintf("reverse package dependencies widen package blast radius (%d package(s))", len(view.Package.ReverseDeps)))
+	}
+	if len(view.EmpiricalPackages) > 0 || len(view.EmpiricalFiles) > 0 {
+		why = append(why, "empirical co-change history widens impact beyond direct graph edges")
+	}
+	if view.HasRecentDelta {
+		delta := view.RecentDelta
+		if delta.ContractChanged || delta.Moved || delta.AddedCallers+delta.RemovedCallers+delta.AddedRefsIn+delta.RemovedRefsIn+delta.AddedTests+delta.RemovedTests > 0 {
+			why = append(why, "recent symbol delta biases impact toward recently changed caller/reference/test surface")
+		}
+	}
+	return stableImpactStrings(why)
+}
+
+func coChangePackageLabels(values []CoChangeItem) []string {
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		if value.Label != "" {
+			items = append(items, value.Label)
+		}
+	}
+	return stableImpactStrings(items)
+}
+
+func coChangeFileLabels(values []CoChangeItem) []string {
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		if value.Label != "" {
+			items = append(items, value.Label)
+		}
+	}
+	return stableImpactStrings(items)
+}
+
+func mergeImpactPackages(parts ...[]string) []string {
+	items := make([]string, 0)
+	for _, values := range parts {
+		items = append(items, values...)
+	}
+	return stableImpactStrings(items)
+}
+
+func mergeImpactFiles(callers []RelatedSymbolView, refs []RefView, tests []TestView, extra []string) []string {
+	items := make([]string, 0, len(callers)+len(refs)+len(tests)+len(extra))
+	for _, value := range callers {
+		if value.UseFilePath != "" {
+			items = append(items, value.UseFilePath)
+		}
+	}
+	for _, value := range refs {
+		if value.UseFilePath != "" {
+			items = append(items, value.UseFilePath)
+		}
+	}
+	for _, value := range tests {
+		if value.FilePath != "" {
+			items = append(items, value.FilePath)
+		}
+	}
+	items = append(items, extra...)
+	return stableImpactStrings(items)
+}
+
+func stableImpactStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		items = append(items, value)
+	}
+	sort.Strings(items)
+	return items
 }
 
 func (s *Store) loadCallers(snapshotID int64, symbolKey string) ([]RelatedSymbolView, error) {

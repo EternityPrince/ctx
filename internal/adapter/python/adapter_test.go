@@ -175,6 +175,222 @@ func TestAnalyzeFiltersToRequestedPackages(t *testing.T) {
 	}
 }
 
+func TestAnalyzeUsesConfiguredSourceRootsForModuleAndPackageNames(t *testing.T) {
+	result, symbolKeys := analyzePythonFixture(t, map[string]string{
+		"pyproject.toml":      "[project]\nname = \"root-demo\"\n\n[tool.setuptools.packages.find]\nwhere = [\"lib\"]\n",
+		"lib/pkg/__init__.py": "",
+		"lib/pkg/service.py": `def run() -> int:
+    return 1
+`,
+		"lib/app/__init__.py": "",
+		"lib/app/runner.py": `from pkg.service import run
+
+def execute() -> int:
+    return run()
+`,
+	})
+
+	assertPackagePaths(t, result.Packages, []string{"app", "pkg"})
+	assertSymbolKinds(t, result.Symbols, map[string]string{
+		"app.runner.execute": "func",
+		"pkg.service.run":    "func",
+	})
+	assertCallEdge(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.service.run")
+	assertDependency(t, result.Dependencies, "app", "pkg")
+}
+
+func TestAnalyzeTracksNamespacePackageImportsWithoutInitFiles(t *testing.T) {
+	result, symbolKeys := analyzePythonFixture(t, map[string]string{
+		"pyproject.toml": "[project]\nname = \"ns-demo\"\n\n[tool.setuptools.packages.find]\nwhere = [\"lib\"]\n",
+		"lib/pkg/service.py": `def run() -> int:
+    return 1
+`,
+		"lib/app/runner.py": `import pkg.service
+
+def execute() -> int:
+    return pkg.service.run()
+`,
+	})
+
+	assertPackagePaths(t, result.Packages, []string{"app", "pkg"})
+	assertCallEdge(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.service.run")
+	assertDependency(t, result.Dependencies, "app", "pkg")
+}
+
+func TestAnalyzeTracksNestedImportsAsDependencies(t *testing.T) {
+	result, symbolKeys := analyzePythonFixture(t, map[string]string{
+		"pyproject.toml":  "[project]\nname = \"nested-demo\"\n",
+		"pkg/__init__.py": "",
+		"pkg/service.py": `def run() -> int:
+    return 1
+`,
+		"app/__init__.py": "",
+		"app/runner.py": `def execute() -> int:
+    from pkg.service import run
+    return run()
+`,
+	})
+
+	assertCallEdge(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.service.run")
+	assertDependency(t, result.Dependencies, "app", "pkg")
+}
+
+func TestAnalyzeTracksReexportChainsThroughPackageInit(t *testing.T) {
+	result, symbolKeys := analyzePythonFixture(t, map[string]string{
+		"pyproject.toml":  "[project]\nname = \"reexport-demo\"\n",
+		"pkg/__init__.py": "from .service import run as public_run\n__all__ = [\"public_run\"]\n",
+		"pkg/service.py": `def run() -> int:
+    return 1
+`,
+		"app/__init__.py": "",
+		"app/runner.py": `from pkg import public_run
+
+def execute() -> int:
+    return public_run()
+`,
+	})
+
+	assertCallEdge(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.service.run")
+	assertCallDispatch(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.service.run", "reexport")
+	assertDependency(t, result.Dependencies, "app", "pkg")
+}
+
+func TestAnalyzeTracksStarReexportsViaAll(t *testing.T) {
+	result, symbolKeys := analyzePythonFixture(t, map[string]string{
+		"pyproject.toml":  "[project]\nname = \"all-demo\"\n",
+		"pkg/__init__.py": "from .service import *\n__all__ = [\"run\"]\n",
+		"pkg/service.py": `def run() -> int:
+    return 1
+`,
+		"app/__init__.py": "",
+		"app/runner.py": `from pkg import run
+
+def execute() -> int:
+    return run()
+`,
+	})
+
+	assertCallEdge(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.service.run")
+	assertDependency(t, result.Dependencies, "app", "pkg")
+}
+
+func TestAnalyzeTracksTypeCheckingImportsAsDepsAndRefs(t *testing.T) {
+	result, symbolKeys := analyzePythonFixture(t, map[string]string{
+		"pyproject.toml":  "[project]\nname = \"typing-demo\"\n",
+		"pkg/__init__.py": "",
+		"pkg/service.py": `class Service:
+    def run(self) -> int:
+        return 1
+`,
+		"app/__init__.py": "",
+		"app/runner.py": `from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pkg.service import Service
+
+def accepts(service: Service) -> int:
+    return 1
+`,
+	})
+
+	assertDependency(t, result.Dependencies, "app", "pkg")
+	assertReference(t, result.References, symbolKeys, "app.runner.accepts", "pkg.service.Service")
+}
+
+func TestAnalyzeSkipsUnparseablePythonFilesInsteadOfAborting(t *testing.T) {
+	result, symbolKeys := analyzePythonFixture(t, map[string]string{
+		"pyproject.toml":  "[project]\nname = \"skip-demo\"\n",
+		"pkg/__init__.py": "",
+		"pkg/good.py": `def run() -> int:
+    return 1
+`,
+		"pkg/bad.py": "✨\n",
+		"app/__init__.py": "",
+		"app/runner.py": `from pkg.good import run
+
+def execute() -> int:
+    return run()
+`,
+	})
+
+	assertPackagePaths(t, result.Packages, []string{"app", "pkg"})
+	assertCallEdge(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.good.run")
+	assertDependency(t, result.Dependencies, "app", "pkg")
+}
+
+func TestAnalyzeTracksModuleExportAssignments(t *testing.T) {
+	result, symbolKeys := analyzePythonFixture(t, map[string]string{
+		"pyproject.toml":  "[project]\nname = \"alias-demo\"\n",
+		"pkg/__init__.py": "from .service import run\npublic_run = run\n",
+		"pkg/service.py": `def run() -> int:
+    return 1
+`,
+		"app/__init__.py": "",
+		"app/runner.py": `from pkg import public_run
+
+def execute() -> int:
+    return public_run()
+`,
+	})
+
+	assertCallEdge(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.service.run")
+	assertDependency(t, result.Dependencies, "app", "pkg")
+}
+
+func TestAnalyzeTracksStringAnnotationsAndTypeCheckingCalls(t *testing.T) {
+	result, symbolKeys := analyzePythonFixture(t, map[string]string{
+		"pyproject.toml":  "[project]\nname = \"strings-demo\"\n",
+		"pkg/__init__.py": "",
+		"pkg/service.py": `class Service:
+    def run(self) -> int:
+        return 1
+`,
+		"app/__init__.py": "",
+		"app/runner.py": `from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pkg.service import Service
+
+def execute(service: "Service") -> int:
+    return service.run()
+`,
+	})
+
+	assertDependency(t, result.Dependencies, "app", "pkg")
+	assertReference(t, result.References, symbolKeys, "app.runner.execute", "pkg.service.Service")
+	assertReferenceKind(t, result.References, symbolKeys, "app.runner.execute", "pkg.service.Service", "type_checking_type")
+	assertCallEdge(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.service.Service.run")
+}
+
+func TestAnalyzeTracksImportlibDynamicImports(t *testing.T) {
+	result, symbolKeys := analyzePythonFixture(t, map[string]string{
+		"pyproject.toml":  "[project]\nname = \"importlib-demo\"\n",
+		"pkg/__init__.py": "",
+		"pkg/service.py": `def run() -> int:
+    return 1
+`,
+		"app/__init__.py": "",
+		"app/runner.py": `import importlib
+from importlib import import_module as load
+
+def execute() -> int:
+    service = importlib.import_module("pkg.service")
+    return service.run()
+
+def execute_alias() -> int:
+    service = load("pkg.service")
+    return service.run()
+`,
+	})
+
+	assertDependency(t, result.Dependencies, "app", "pkg")
+	assertCallEdge(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.service.run")
+	assertCallEdge(t, result.Calls, symbolKeys, "app.runner.execute_alias", "pkg.service.run")
+	assertCallDispatch(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.service.run", "dynamic_import")
+	assertCallDispatch(t, result.Calls, symbolKeys, "app.runner.execute_alias", "pkg.service.run", "dynamic_import")
+}
+
 func analyzePythonFixture(t *testing.T, files map[string]string) (*codebase.Result, map[string]string) {
 	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {
@@ -216,6 +432,17 @@ func writePythonFixture(t *testing.T, root, relPath, content string) {
 		t.Fatalf("mkdir %s: %v", path, err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func writePythonFixtureBytes(t *testing.T, root, relPath string, content []byte) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
@@ -263,6 +490,23 @@ func assertCallEdge(t *testing.T, calls []codebase.CallFact, symbolKeys map[stri
 	t.Fatalf("expected call edge %s -> %s, got %+v", callerQName, calleeQName, calls)
 }
 
+func assertCallDispatch(t *testing.T, calls []codebase.CallFact, symbolKeys map[string]string, callerQName, calleeQName, dispatch string) {
+	t.Helper()
+
+	callerKey := symbolKeys[callerQName]
+	calleeKey := symbolKeys[calleeQName]
+
+	for _, call := range calls {
+		if call.CallerSymbolKey == callerKey && call.CalleeSymbolKey == calleeKey {
+			if call.Dispatch != dispatch {
+				t.Fatalf("unexpected call dispatch for %s -> %s: got %q want %q", callerQName, calleeQName, call.Dispatch, dispatch)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected call edge %s -> %s, got %+v", callerQName, calleeQName, calls)
+}
+
 func assertDependency(t *testing.T, deps []codebase.DependencyFact, fromPackage, toPackage string) {
 	t.Helper()
 	for _, dep := range deps {
@@ -279,6 +523,21 @@ func assertReference(t *testing.T, refs []codebase.ReferenceFact, symbolKeys map
 	toKey := symbolKeys[toQName]
 	for _, ref := range refs {
 		if ref.FromSymbolKey == fromKey && ref.ToSymbolKey == toKey {
+			return
+		}
+	}
+	t.Fatalf("expected reference %s -> %s, got %+v", fromQName, toQName, refs)
+}
+
+func assertReferenceKind(t *testing.T, refs []codebase.ReferenceFact, symbolKeys map[string]string, fromQName, toQName, kind string) {
+	t.Helper()
+	fromKey := symbolKeys[fromQName]
+	toKey := symbolKeys[toQName]
+	for _, ref := range refs {
+		if ref.FromSymbolKey == fromKey && ref.ToSymbolKey == toKey {
+			if ref.Kind != kind {
+				t.Fatalf("unexpected reference kind for %s -> %s: got %q want %q", fromQName, toQName, ref.Kind, kind)
+			}
 			return
 		}
 	}

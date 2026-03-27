@@ -145,3 +145,39 @@ func renderAIStringList(stdout io.Writer, title string, values []string, limit i
 	}
 	return renderMoreLine(stdout, len(values), limit)
 }
+
+func renderAIPackageReasons(stdout io.Writer, modulePath, title string, values []storage.ImpactPackageReason, limit int) error {
+	if _, err := fmt.Fprintf(stdout, "%s=%d\n", title, len(values)); err != nil {
+		return err
+	}
+	for _, value := range values[:min(limit, len(values))] {
+		if _, err := fmt.Fprintf(stdout, "- package=%s why=%q\n", shortenQName(modulePath, value.PackageImportPath), strings.Join(value.Why, " | ")); err != nil {
+			return err
+		}
+	}
+	return renderMoreLine(stdout, len(values), limit)
+}
+
+func renderAIFileReasons(stdout io.Writer, title string, values []storage.ImpactFileReason, limit int) error {
+	if _, err := fmt.Fprintf(stdout, "%s=%d\n", title, len(values)); err != nil {
+		return err
+	}
+	for _, value := range values[:min(limit, len(values))] {
+		if _, err := fmt.Fprintf(stdout, "- file=%s why=%q\n", value.FilePath, strings.Join(value.Why, " | ")); err != nil {
+			return err
+		}
+	}
+	return renderMoreLine(stdout, len(values), limit)
+}
+
+func renderAICoChangeItems(stdout io.Writer, title string, values []storage.CoChangeItem, limit int) error {
+	if _, err := fmt.Fprintf(stdout, "%s=%d\n", title, len(values)); err != nil {
+		return err
+	}
+	for _, value := range values[:min(limit, len(values))] {
+		if _, err := fmt.Fprintf(stdout, "- %s\n", formatCoChangeItem(value)); err != nil {
+			return err
+		}
+	}
+	return renderMoreLine(stdout, len(values), limit)
+}

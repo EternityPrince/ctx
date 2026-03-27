@@ -21,12 +21,25 @@ func formatDurationMillis(value int) string {
 
 func formatSnapshotTelemetry(snapshot storage.SnapshotInfo) string {
 	return fmt.Sprintf(
-		"scan=%s analyze=%s write=%s total=%s bottleneck=%s scanned_files=%d",
+		"scan=%s analyze=%s write=%s total=%s bottleneck=%s scanned_files=%d mode=%s direct_pkgs=%d expanded_pkgs=%d reused_pkgs=%d reuse=%d%% plan_cache=%t",
 		formatDurationMillis(snapshot.ScanDurationMs),
 		formatDurationMillis(snapshot.AnalyzeDurationMs),
 		formatDurationMillis(snapshot.WriteDurationMs),
 		formatDurationMillis(snapshot.TotalDurationMs()),
 		snapshot.TimingBottleneck(),
 		snapshot.ScannedFiles,
+		blankIf(snapshot.IncrementalMode, "unknown"),
+		snapshot.DirectPackages,
+		snapshot.ExpandedPackages,
+		snapshot.ReusedPackages,
+		snapshot.ReusePercent,
+		snapshot.PlanCacheHit,
 	)
+}
+
+func blankIf(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }

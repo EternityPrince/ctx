@@ -31,7 +31,9 @@ func newNativeWatchBackend(root string) (watchBackend, error) {
 	return backend, nil
 }
 
-func (b *darwinWatchBackend) Mode() string { return "events" }
+func (b *darwinWatchBackend) Mode() string { return "events+kqueue" }
+
+func (b *darwinWatchBackend) EventDriven() bool { return true }
 
 func (b *darwinWatchBackend) Wait(timeout time.Duration) (watchWake, error) {
 	events := make([]syscall.Kevent_t, 16)

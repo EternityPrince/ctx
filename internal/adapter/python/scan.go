@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/vladimirkasterin/ctx/internal/codebase"
 	"github.com/vladimirkasterin/ctx/internal/filter"
@@ -62,14 +63,25 @@ func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 			return fmt.Errorf("read file %s: %w", path, err)
 		}
 
+		identity := ""
+		semanticMeta := ""
+		if isModule {
+			meta := codebase.ParsePythonProjectManifestMeta(name, data)
+			semanticMeta = codebase.EncodeManifestMeta(meta)
+			if name == "pyproject.toml" || name == "setup.cfg" || name == "setup.py" {
+				identity = meta.Name
+			}
+		}
 		sum := sha256.Sum256(data)
 		files = append(files, codebase.ScanFile{
-			AbsPath:   path,
-			RelPath:   relPath,
-			Hash:      hex.EncodeToString(sum[:]),
-			SizeBytes: int64(len(data)),
-			IsTest:    isPython && codebase.IsPythonTestFile(relPath),
-			IsModule:  isModule,
+			AbsPath:      path,
+			RelPath:      relPath,
+			Identity:     identity,
+			SemanticMeta: semanticMeta,
+			Hash:         hex.EncodeToString(sum[:]),
+			SizeBytes:    int64(len(data)),
+			IsTest:       isPython && codebase.IsPythonTestFile(relPath),
+			IsModule:     isModule,
 		})
 		return nil
 	})
@@ -77,8 +89,48 @@ func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 		return nil, err
 	}
 
+	sourceRoots := pythonSourceRootsFromScanFiles(files)
+	for idx := range files {
+		if !codebase.IsPythonFile(files[idx].RelPath) {
+			continue
+		}
+		files[idx].PackageImportPath = codebase.PythonPackageImportPathWithRoots("", files[idx].RelPath, sourceRoots)
+	}
+
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].RelPath < files[j].RelPath
 	})
 	return files, nil
+}
+
+func pythonSourceRootsFromScanFiles(files []codebase.ScanFile) []string {
+	roots := []string{"src"}
+	for _, file := range files {
+		if !file.IsModule {
+			continue
+		}
+		meta := codebase.DecodeManifestMeta(file.SemanticMeta)
+		roots = append(roots, meta.PackageRoots...)
+	}
+	return stablePythonRoots(roots)
+}
+
+func stablePythonRoots(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	roots := make([]string, 0, len(values))
+	for _, value := range values {
+		value = filepath.ToSlash(value)
+		value = strings.TrimSpace(value)
+		value = strings.TrimPrefix(value, "./")
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		roots = append(roots, value)
+	}
+	sort.Strings(roots)
+	return roots
 }

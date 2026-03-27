@@ -94,6 +94,8 @@ func TestRenderHumanReportExplainIncludesProvenance(t *testing.T) {
 
 	text := stripANSICodes(out.String())
 	for _, expected := range []string{
+		"Explain",
+		"Precision:",
 		"Provenance:",
 		"Key Files",
 		"why: main entrypoint file",
@@ -187,19 +189,175 @@ func TestRenderHumanSymbolViewIncludesWhyLines(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := renderHumanSymbolView(&out, "/tmp/project", "example.com/project", view, guidance)
+	err := renderHumanSymbolView(&out, "/tmp/project", "example.com/project", view, guidance, true)
 	if err != nil {
 		t.Fatalf("renderHumanSymbolView returned error: %v", err)
 	}
 
 	text := stripANSICodes(out.String())
 	for _, expected := range []string{
+		"Explain",
+		"Quality score:",
 		"why: static call edge from indexed call site",
 		"why: receiver reference in indexed source",
 		"why: direct receiver match (high)",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("expected %q in symbol output, got:\n%s", expected, text)
+		}
+	}
+}
+
+func TestRenderHumanImpactViewIncludesBlastRadiusSections(t *testing.T) {
+	view := storage.ImpactView{
+		Target: storage.SymbolMatch{
+			SymbolKey:         "example.com/project/pkg.helper",
+			QName:             "example.com/project/pkg.helper",
+			PackageImportPath: "example.com/project/pkg",
+			FilePath:          "pkg/service.go",
+			Name:              "helper",
+			Kind:              "func",
+			Signature:         "func helper()",
+			Line:              8,
+		},
+		Package: storage.PackageSummary{
+			ImportPath:  "example.com/project/pkg",
+			DirPath:     "pkg",
+			FileCount:   3,
+			SymbolCount: 3,
+			TestCount:   2,
+			ReverseDeps: []string{"example.com/project/api"},
+		},
+		DirectCallers: []storage.RelatedSymbolView{
+			{
+				Symbol: storage.SymbolMatch{
+					SymbolKey:         "example.com/project/api.Handle",
+					QName:             "example.com/project/api.Handle",
+					PackageImportPath: "example.com/project/api",
+					FilePath:          "api/handler.go",
+					Name:              "Handle",
+					Kind:              "func",
+					Signature:         "func Handle()",
+					Line:              3,
+				},
+				UseFilePath: "api/handler.go",
+				UseLine:     6,
+				Relation:    "static",
+				Why:         "static call edge from indexed call site",
+			},
+		},
+		InboundRefs: []storage.RefView{
+			{
+				Symbol: storage.SymbolMatch{
+					SymbolKey:         "example.com/project/api.Handle",
+					QName:             "example.com/project/api.Handle",
+					PackageImportPath: "example.com/project/api",
+					FilePath:          "api/handler.go",
+					Name:              "Handle",
+					Kind:              "func",
+					Signature:         "func Handle()",
+					Line:              3,
+				},
+				UseFilePath: "api/handler.go",
+				UseLine:     5,
+				Kind:        "func",
+				Why:         "function reference in indexed source",
+			},
+		},
+		CallerPackages:    []string{"example.com/project/api"},
+		ReferencePackages: []string{"example.com/project/api"},
+		BlastPackages:     []string{"example.com/project/api"},
+		CallerPackageReasons: []storage.ImpactPackageReason{
+			{
+				PackageImportPath: "example.com/project/api",
+				Why:               []string{"static call edge from indexed call site via example.com/project/api.Handle @ api/handler.go:6"},
+			},
+		},
+		ReferencePackageReasons: []storage.ImpactPackageReason{
+			{
+				PackageImportPath: "example.com/project/api",
+				Why:               []string{"function reference in indexed source via example.com/project/api.Handle @ api/handler.go:5"},
+			},
+		},
+		BlastPackageReasons: []storage.ImpactPackageReason{
+			{
+				PackageImportPath: "example.com/project/api",
+				Why: []string{
+					"static call edge from indexed call site via example.com/project/api.Handle @ api/handler.go:6",
+					"function reference in indexed source via example.com/project/api.Handle @ api/handler.go:5",
+					"reverse package dependency in local graph",
+				},
+			},
+		},
+		BlastFileReasons: []storage.ImpactFileReason{
+			{
+				FilePath: "api/handler.go",
+				Why: []string{
+					"static call edge from indexed call site via example.com/project/api.Handle @ api/handler.go:6",
+					"function reference in indexed source via example.com/project/api.Handle @ api/handler.go:5",
+				},
+			},
+			{
+				FilePath: "pkg/service_test.go",
+				Why: []string{
+					"direct symbol match (high) via TestHelper @ pkg/service_test.go:9",
+				},
+			},
+		},
+		ExpansionWhy: []string{
+			"reverse package dependencies widen package blast radius (1 package(s))",
+			"empirical co-change history widens impact beyond direct graph edges",
+			"recent symbol delta biases impact toward recently changed caller/reference/test surface",
+		},
+		BlastFiles:        []string{"api/handler.go", "pkg/service_test.go"},
+		EmpiricalPackages: []storage.CoChangeItem{{Label: "example.com/project/api", Count: 1, Frequency: 0.5}},
+		EmpiricalFiles:    []storage.CoChangeItem{{Label: "api/handler.go", Count: 1, Frequency: 0.5}},
+		Tests: []storage.TestView{
+			{
+				TestKey:    "example.com/project/pkg:TestHelper",
+				Name:       "TestHelper",
+				FilePath:   "pkg/service_test.go",
+				Line:       9,
+				Kind:       "func",
+				LinkKind:   "direct",
+				Confidence: "high",
+				Why:        "direct symbol match (high)",
+			},
+		},
+	}
+
+	guidance := symbolTestGuidance{
+		ReadBefore:   view.Tests,
+		DirectCount:  1,
+		StrongDirect: 1,
+		Signal:       "direct=1 strong",
+	}
+
+	var out bytes.Buffer
+	err := renderHumanImpactView(&out, "/tmp/project", "example.com/project", view, guidance, 3, true)
+	if err != nil {
+		t.Fatalf("renderHumanImpactView returned error: %v", err)
+	}
+
+	text := stripANSICodes(out.String())
+	for _, expected := range []string{
+		"Explain",
+		"Blast radius:",
+		"Inbound References",
+		"Reference Packages",
+		"Blast Packages",
+		"Blast Files",
+		"why: reverse package dependencies widen package blast radius (1 package(s))",
+		"why: empirical co-change history widens impact beyond direct graph edges",
+		"Empirical Packages",
+		"Empirical Files",
+		"why: static call edge from indexed call site via example.com/project/api.Handle @ api/handler.go:6",
+		"why: function reference in indexed source via example.com/project/api.Handle @ api/handler.go:5",
+		"why: direct symbol match (high) via TestHelper @ pkg/service_test.go:9",
+		"api/handler.go (count=1 freq=0.50)",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected %q in impact output, got:\n%s", expected, text)
 		}
 	}
 }

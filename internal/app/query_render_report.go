@@ -49,6 +49,22 @@ func renderHumanReport(stdout io.Writer, projectRoot, modulePath string, status 
 	if _, err := fmt.Fprintln(stdout); err != nil {
 		return err
 	}
+	if explain {
+		notes := append([]string{}, view.ProvenanceNotes...)
+		if len(notes) == 0 {
+			notes = append(notes, "ranking is derived from indexed graph signals, change proximity, entrypoint heuristics, and stored test links")
+		}
+		if err := renderHumanExplainSection(stdout, p, explainSection{
+			Title: "Explain",
+			Facts: []explainFact{
+				{Key: "Focus", Value: "top-ranked packages, files, functions, and types"},
+				{Key: "Precision", Value: "best-effort ranking from graph + change proximity + entrypoint heuristics"},
+			},
+			Notes: notes,
+		}); err != nil {
+			return err
+		}
+	}
 
 	if err := renderHumanPackages(stdout, p, modulePath, "Key Packages", view.TopPackages, explain); err != nil {
 		return err
@@ -107,6 +123,22 @@ func renderAIReport(stdout io.Writer, modulePath string, status storage.ProjectS
 	}
 	for _, note := range view.ProvenanceNotes {
 		if _, err := fmt.Fprintf(stdout, "provenance=%q\n", note); err != nil {
+			return err
+		}
+	}
+	if explain {
+		notes := append([]string{}, view.ProvenanceNotes...)
+		if len(notes) == 0 {
+			notes = append(notes, "ranking is derived from indexed graph signals, change proximity, entrypoint heuristics, and stored test links")
+		}
+		if err := renderAIExplainSection(stdout, "explain", explainSection{
+			Title: "Explain",
+			Facts: []explainFact{
+				{Key: "Focus", Value: "top-ranked packages, files, functions, and types"},
+				{Key: "Precision", Value: "best-effort ranking from graph + change proximity + entrypoint heuristics"},
+			},
+			Notes: notes,
+		}); err != nil {
 			return err
 		}
 	}

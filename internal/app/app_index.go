@@ -22,13 +22,13 @@ func runIndexLike(command cli.Command, stdout io.Writer, forceFull bool) error {
 		return err
 	}
 	if !committed {
-		_, err := fmt.Fprintf(stdout, "No changes detected. current_snapshot=%d cache_hit=%t reason=%q\n", snapshot.ID, plan.CacheHit, strings.TrimSpace(plan.Reason))
+		_, err := fmt.Fprintf(stdout, "No changes detected. current_snapshot=%d mode=%s direct_pkgs=%d expanded_pkgs=%d reused_pkgs=%d reuse=%d%% cache_hit=%t reason=%q\n", snapshot.ID, plan.Metrics.Mode, plan.Metrics.DirectPackageCount, plan.Metrics.ExpandedPackageCount, plan.Metrics.ReusedPackageCount, plan.Metrics.ReusePercent, plan.CacheHit, strings.TrimSpace(plan.Reason))
 		return err
 	}
 
 	_, err = fmt.Fprintf(
 		stdout,
-		"snapshot=%d kind=%s packages=%d files=%d symbols=%d refs=%d calls=%d tests=%d changed_files=%d changed_packages=%d changed_symbols=%d scan_ms=%d analyze_ms=%d write_ms=%d scanned_files=%d cache_hit=%t reason=%q\n",
+		"snapshot=%d kind=%s packages=%d files=%d symbols=%d refs=%d calls=%d tests=%d changed_files=%d changed_packages=%d changed_symbols=%d scan_ms=%d analyze_ms=%d write_ms=%d scanned_files=%d mode=%s direct_pkgs=%d expanded_pkgs=%d reused_pkgs=%d reuse=%d%% cache_hit=%t reason=%q\n",
 		snapshot.ID,
 		snapshot.Kind,
 		snapshot.TotalPackages,
@@ -44,6 +44,11 @@ func runIndexLike(command cli.Command, stdout io.Writer, forceFull bool) error {
 		snapshot.AnalyzeDurationMs,
 		snapshot.WriteDurationMs,
 		snapshot.ScannedFiles,
+		snapshot.IncrementalMode,
+		snapshot.DirectPackages,
+		snapshot.ExpandedPackages,
+		snapshot.ReusedPackages,
+		snapshot.ReusePercent,
 		plan.CacheHit,
 		strings.TrimSpace(plan.Reason),
 	)
@@ -51,11 +56,11 @@ func runIndexLike(command cli.Command, stdout io.Writer, forceFull bool) error {
 		return err
 	}
 	if command.Explain {
-		text, err := explainChangePlan(state, plan)
+		explained, err := buildChangePlanExplain(state, plan)
 		if err != nil {
 			return err
 		}
-		_, err = io.WriteString(stdout, text)
+		err = renderHumanExplainSection(stdout, newPalette(), explained)
 	}
 	return err
 }
@@ -90,12 +95,16 @@ func runStatus(command cli.Command, stdout io.Writer) error {
 			}
 		}
 		if command.Explain {
-			text, err := explainChangePlan(state, plan)
+			explained, err := buildChangePlanExplain(state, plan)
 			if err != nil {
 				return err
 			}
-			_, err = io.WriteString(stdout, text)
-			return err
+			switch command.OutputMode {
+			case cli.OutputAI:
+				return renderAIExplainSection(stdout, "explain", explained)
+			default:
+				return renderHumanExplainSection(stdout, newPalette(), explained)
+			}
 		}
 		return nil
 	}
@@ -103,7 +112,7 @@ func runStatus(command cli.Command, stdout io.Writer) error {
 	if command.OutputMode == cli.OutputAI {
 		_, err = fmt.Fprintf(
 			stdout,
-			"root=%s\nmodule=%s\nlanguage=%s\nversion=%s\ncomposition=%s\ncapabilities=%s\nsnapshot=%d\nsnapshot_at=%s\npackages=%d\nfiles=%d\nsymbols=%d\nrefs=%d\ncalls=%d\ntests=%d\nscan_ms=%d\nanalyze_ms=%d\nwrite_ms=%d\nscanned_files=%d\nchanged_now=%d\nstorage_snapshots=%d\nstorage_limit=%d\nstorage_total_bytes=%d\nstorage_avg_snapshot_bytes=%d\ndb=%s\n",
+			"root=%s\nmodule=%s\nlanguage=%s\nversion=%s\ncomposition=%s\ncapabilities=%s\nsnapshot=%d\nsnapshot_at=%s\npackages=%d\nfiles=%d\nsymbols=%d\nrefs=%d\ncalls=%d\ntests=%d\nscan_ms=%d\nanalyze_ms=%d\nwrite_ms=%d\nscanned_files=%d\nmode=%s\ndirect_packages=%d\nexpanded_packages=%d\nreused_packages=%d\nreuse_percent=%d\nchanged_now=%d\nstorage_snapshots=%d\nstorage_limit=%d\nstorage_total_bytes=%d\nstorage_avg_snapshot_bytes=%d\ndb=%s\n",
 			status.RootPath,
 			status.ModulePath,
 			state.Info.Language,
@@ -122,6 +131,11 @@ func runStatus(command cli.Command, stdout io.Writer) error {
 			status.Current.AnalyzeDurationMs,
 			status.Current.WriteDurationMs,
 			status.Current.ScannedFiles,
+			status.Current.IncrementalMode,
+			status.Current.DirectPackages,
+			status.Current.ExpandedPackages,
+			status.Current.ReusedPackages,
+			status.Current.ReusePercent,
 			status.ChangedNow,
 			status.Storage.SnapshotCount,
 			status.Storage.SnapshotLimit,
@@ -161,11 +175,16 @@ func runStatus(command cli.Command, stdout io.Writer) error {
 		return err
 	}
 	if command.Explain {
-		text, err := explainChangePlan(state, plan)
+		explained, err := buildChangePlanExplain(state, plan)
 		if err != nil {
 			return err
 		}
-		_, err = io.WriteString(stdout, text)
+		switch command.OutputMode {
+		case cli.OutputAI:
+			err = renderAIExplainSection(stdout, "explain", explained)
+		default:
+			err = renderHumanExplainSection(stdout, newPalette(), explained)
+		}
 	}
 	return err
 }

@@ -126,10 +126,18 @@ def package_basename(package_path, module_name):
     return "root"
 
 
-def reference_kind(kind):
-    if kind == "class":
-        return "type_ref"
-    return "value_ref"
+def reference_kind(kind, meta="", annotation=False):
+    is_type = kind == "class"
+
+    if meta in ("type_checking_import", "type_checking_reexport"):
+        return "type_checking_type" if is_type else "type_checking"
+    if meta == "re_export":
+        return "reexport_type" if is_type else "reexport"
+    if annotation:
+        return "annotation_type" if is_type else "annotation"
+    if is_type:
+        return "type"
+    return "value"
 
 
 def dotted(*parts):

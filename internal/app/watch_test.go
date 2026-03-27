@@ -19,6 +19,8 @@ type fakeWatchBackend struct {
 
 func (b *fakeWatchBackend) Mode() string { return b.mode }
 
+func (b *fakeWatchBackend) EventDriven() bool { return b.mode != "poll" }
+
 func (b *fakeWatchBackend) Wait(timeout time.Duration) (watchWake, error) {
 	_ = timeout
 	b.calls++
@@ -90,7 +92,7 @@ func TestRunWatchAppliesIncrementalUpdate(t *testing.T) {
 		t.Fatalf("runWatchLoop returned error: %v", err)
 	}
 	text := stripANSICodes(out.String())
-	for _, expected := range []string{"Watching ", "mode=events", "action=bootstrap", "action=update", "cache_hit=", "Watch complete: cycles=2"} {
+	for _, expected := range []string{"Watching ", "mode=events", "action=bootstrap", "action=update", "cache_hit=", "Explain", "Action:", "Watch complete: cycles=2"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("expected %q in watch output, got:\n%s", expected, text)
 		}

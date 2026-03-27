@@ -12,6 +12,7 @@ const locateSymbolScript = `
 import ast
 import json
 import sys
+import tokenize
 
 payload = json.load(sys.stdin)
 path = payload["path"]
@@ -20,11 +21,15 @@ kind = payload["kind"]
 receiver = payload.get("receiver") or ""
 line = int(payload["line"])
 
-with open(path, "r", encoding="utf-8") as handle:
-    source = handle.read()
-
-tree = ast.parse(source, filename=path, type_comments=True)
 result = {"start": 0, "end": 0}
+
+try:
+    with tokenize.open(path) as handle:
+        source = handle.read()
+    tree = ast.parse(source, filename=path, type_comments=True)
+except Exception:
+    json.dump(result, sys.stdout)
+    raise SystemExit(0)
 
 for node in tree.body:
     if kind == "func" and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name and node.lineno == line:

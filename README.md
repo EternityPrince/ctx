@@ -136,8 +136,8 @@ From there you can move naturally:
 ### 4. Work with a changing repo
 
 `ctx` keeps snapshots and refreshes itself incrementally. For common read commands, it can auto-refresh before answering if the working tree changed since the last snapshot. Repeated no-op checks reuse a stored change cache keyed by the current snapshot and scanned tree fingerprint.
-Dependency lockfiles and metadata files are now treated more precisely too: `go.sum`, `Cargo.lock`, and Python project metadata no longer force a full reindex when the current local source graph is unchanged, and crate/module manifests only stay conservative when identity or workspace shape is actually ambiguous.
-On macOS, `ctx watch` now prefers real filesystem events and falls back to polling when a native watcher cannot be established.
+Dependency lockfiles and metadata files are now treated more precisely too: `go.sum`, `Cargo.lock`, and Python project metadata no longer force a full reindex when the current local source graph is unchanged, while `go.mod` and `Cargo.toml` now use semantic manifest diffs to decide between no-op, partial package refresh, and full reindex.
+On macOS, Linux, and Windows, `ctx watch` now prefers real filesystem events, coalesces event bursts, and falls back to polling when a native watcher cannot be established.
 
 ```bash
 ctx update .
@@ -243,21 +243,24 @@ ctx update .
 
 ### `ctx watch`
 
-Keep the snapshot fresh in a long-running loop. It polls the repository, applies incremental updates when needed, and stays quiet on repeated no-op states except for the initial cycle.
+Keep the snapshot fresh in a long-running loop. It prefers native filesystem events on macOS, Linux, and Windows when available, coalesces event bursts with `--debounce`, applies incremental updates when needed, and can stay quiet on repeated no-op states with `--quiet`.
 
 ```bash
 ctx watch .
 ctx watch . --interval 2s
+ctx watch . --debounce 500ms --quiet
 ctx watch . --interval 500ms --cycles 5 --explain
 ```
 
 ### `ctx status`
 
 Show current snapshot, project inventory, latest index timings, and whether local changes exist.
+Use `--explain` to see the incremental plan in the same explain format used by `update`, `watch`, `symbol`, `impact`, `diff`, `history`, `cochange`, and `report`.
 
 ```bash
 ctx status .
 ctx status . -ai
+ctx status . --explain
 ```
 
 ### `ctx doctor`
@@ -284,28 +287,34 @@ ctx report . --explain
 ### `ctx symbol`
 
 Show a connected view around a function, method, or type.
+Use `--explain` for a concise "why this matters" summary with quality, precision, and strongest signals.
 
 ```bash
 ctx symbol CreateSession
 ctx symbol internal/auth.(*Service).Login
 ctx symbol Parse -ai
+ctx symbol Parse --explain
 ```
 
 ### `ctx impact`
 
 Estimate who may be affected if a symbol changes.
+Use `--explain` to see the expansion logic, recent deltas, and blast-radius caveats in the same explain section style used elsewhere.
 
 ```bash
 ctx impact CreateSession
 ctx impact internal/auth.(*Service).Login --depth 4
+ctx impact internal/auth.(*Service).Login --depth 4 --explain
 ```
 
 ### `ctx diff`
 
 Compare snapshots.
+Use `--explain` for a summary of how the snapshot delta is interpreted and how impacted symbols are widened from direct changes.
 
 ```bash
 ctx diff --from 4 --to 5
+ctx diff --from 4 --to 5 --explain
 ```
 
 ### `ctx snapshots`

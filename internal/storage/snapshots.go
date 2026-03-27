@@ -23,6 +23,12 @@ type SnapshotInfo struct {
 	ScanDurationMs    int
 	AnalyzeDurationMs int
 	WriteDurationMs   int
+	IncrementalMode   string
+	DirectPackages    int
+	ExpandedPackages  int
+	ReusedPackages    int
+	ReusePercent      int
+	PlanCacheHit      bool
 	TotalPackages     int
 	TotalFiles        int
 	TotalSymbols      int
@@ -56,6 +62,30 @@ func snapshotFromRow(snapshot SnapshotInfo, createdAt string) (SnapshotInfo, err
 	}
 	snapshot.CreatedAt = parsed
 	return snapshot, nil
+}
+
+func newBoolScanDest(target *bool) any {
+	return sqlScannerFunc(func(src any) error {
+		switch value := src.(type) {
+		case int64:
+			*target = value != 0
+			return nil
+		case int:
+			*target = value != 0
+			return nil
+		case []byte:
+			*target = string(value) != "0" && string(value) != ""
+			return nil
+		default:
+			return fmt.Errorf("unsupported bool scan type %T", src)
+		}
+	})
+}
+
+type sqlScannerFunc func(src any) error
+
+func (fn sqlScannerFunc) Scan(src any) error {
+	return fn(src)
 }
 
 func (s SnapshotInfo) TotalDurationMs() int {
@@ -93,6 +123,12 @@ func (s *Store) CurrentSnapshot() (SnapshotInfo, bool, error) {
 			s.scan_ms,
 			s.analyze_ms,
 			s.write_ms,
+			s.incremental_mode,
+			s.direct_packages,
+			s.expanded_packages,
+			s.reused_packages,
+			s.reuse_percent,
+			s.plan_cache_hit,
 			s.total_packages,
 			s.total_files,
 			s.total_symbols,
@@ -119,6 +155,12 @@ func (s *Store) CurrentSnapshot() (SnapshotInfo, bool, error) {
 		&snapshot.ScanDurationMs,
 		&snapshot.AnalyzeDurationMs,
 		&snapshot.WriteDurationMs,
+		&snapshot.IncrementalMode,
+		&snapshot.DirectPackages,
+		&snapshot.ExpandedPackages,
+		&snapshot.ReusedPackages,
+		&snapshot.ReusePercent,
+		newBoolScanDest(&snapshot.PlanCacheHit),
 		&snapshot.TotalPackages,
 		&snapshot.TotalFiles,
 		&snapshot.TotalSymbols,
@@ -191,7 +233,7 @@ func (s *Store) CurrentFiles() (map[string]codebase.PreviousFile, error) {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT rel_path, package_import_path, identity, content_hash, is_test
+		SELECT rel_path, package_import_path, identity, semantic_meta, content_hash, is_test
 		FROM files
 		WHERE snapshot_id = ?
 	`, snapshot.ID)
@@ -204,7 +246,7 @@ func (s *Store) CurrentFiles() (map[string]codebase.PreviousFile, error) {
 	for rows.Next() {
 		var record codebase.PreviousFile
 		var isTest int
-		if err := rows.Scan(&record.RelPath, &record.PackageImportPath, &record.Identity, &record.Hash, &isTest); err != nil {
+		if err := rows.Scan(&record.RelPath, &record.PackageImportPath, &record.Identity, &record.SemanticMeta, &record.Hash, &isTest); err != nil {
 			return nil, fmt.Errorf("scan current file: %w", err)
 		}
 		record.IsTest = isTest == 1
@@ -222,6 +264,7 @@ func (s *Store) SnapshotByID(id int64) (SnapshotInfo, error) {
 	err := s.db.QueryRow(`
 		SELECT id, parent_id, kind, note, created_at, changed_files, changed_packages, changed_symbols,
 		       scanned_files, scan_ms, analyze_ms, write_ms,
+		       incremental_mode, direct_packages, expanded_packages, reused_packages, reuse_percent, plan_cache_hit,
 		       total_packages, total_files, total_symbols, total_calls, total_refs, total_tests
 		FROM snapshots
 		WHERE id = ?
@@ -238,6 +281,12 @@ func (s *Store) SnapshotByID(id int64) (SnapshotInfo, error) {
 		&snapshot.ScanDurationMs,
 		&snapshot.AnalyzeDurationMs,
 		&snapshot.WriteDurationMs,
+		&snapshot.IncrementalMode,
+		&snapshot.DirectPackages,
+		&snapshot.ExpandedPackages,
+		&snapshot.ReusedPackages,
+		&snapshot.ReusePercent,
+		newBoolScanDest(&snapshot.PlanCacheHit),
 		&snapshot.TotalPackages,
 		&snapshot.TotalFiles,
 		&snapshot.TotalSymbols,
@@ -259,6 +308,7 @@ func (s *Store) ListSnapshots() ([]SnapshotInfo, error) {
 	rows, err := s.db.Query(`
 		SELECT id, parent_id, kind, note, created_at, changed_files, changed_packages, changed_symbols,
 		       scanned_files, scan_ms, analyze_ms, write_ms,
+		       incremental_mode, direct_packages, expanded_packages, reused_packages, reuse_percent, plan_cache_hit,
 		       total_packages, total_files, total_symbols, total_calls, total_refs, total_tests
 		FROM snapshots
 		ORDER BY id DESC
@@ -285,6 +335,12 @@ func (s *Store) ListSnapshots() ([]SnapshotInfo, error) {
 			&snapshot.ScanDurationMs,
 			&snapshot.AnalyzeDurationMs,
 			&snapshot.WriteDurationMs,
+			&snapshot.IncrementalMode,
+			&snapshot.DirectPackages,
+			&snapshot.ExpandedPackages,
+			&snapshot.ReusedPackages,
+			&snapshot.ReusePercent,
+			newBoolScanDest(&snapshot.PlanCacheHit),
 			&snapshot.TotalPackages,
 			&snapshot.TotalFiles,
 			&snapshot.TotalSymbols,
@@ -585,8 +641,9 @@ func (s *Store) CommitSnapshotWithTelemetry(kind, note string, scanned []codebas
 			parent_id, kind, created_at, note,
 			changed_files, changed_packages, changed_symbols,
 			scanned_files, scan_ms, analyze_ms, write_ms,
+			incremental_mode, direct_packages, expanded_packages, reused_packages, reuse_percent, plan_cache_hit,
 			total_packages, total_files, total_symbols, total_calls, total_refs, total_tests
-		) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+		) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, '', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	`, parentID, kind, now, note)
 	if err != nil {
 		return SnapshotInfo{}, fmt.Errorf("insert snapshot: %w", err)
@@ -668,6 +725,7 @@ func (s *Store) CommitSnapshotWithTelemetry(kind, note string, scanned []codebas
 		UPDATE snapshots
 		SET changed_files = ?, changed_packages = ?, changed_symbols = ?,
 		    scanned_files = ?, scan_ms = ?, analyze_ms = ?, write_ms = ?,
+		    incremental_mode = ?, direct_packages = ?, expanded_packages = ?, reused_packages = ?, reuse_percent = ?, plan_cache_hit = ?,
 		    total_packages = ?, total_files = ?, total_symbols = ?, total_calls = ?, total_refs = ?, total_tests = ?
 		WHERE id = ?
 	`,
@@ -678,6 +736,12 @@ func (s *Store) CommitSnapshotWithTelemetry(kind, note string, scanned []codebas
 		durationMillis(telemetry.ScanDuration),
 		durationMillis(telemetry.AnalyzeDuration),
 		writeDurationMs,
+		telemetry.PlanMode,
+		telemetry.DirectPackages,
+		telemetry.ExpandedPackages,
+		telemetry.ReusedPackages,
+		telemetry.ReusePercent,
+		boolInt(telemetry.PlanCacheHit),
 		totalPackages,
 		totalFiles,
 		totalSymbols,

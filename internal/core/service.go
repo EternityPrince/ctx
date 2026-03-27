@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -144,15 +145,16 @@ func (s *service) Plan(state ProjectState, forceFull bool) codebase.ChangePlan {
 	}
 	if state.HasCurrentSnapshot {
 		if cached, ok, err := state.Store.LoadChangePlan(state.CurrentSnapshot.ID, fingerprint); err == nil && ok {
-			return finalizePlan(cached, fingerprint, true, forceFull)
+			return s.enrichPlan(state, finalizePlan(cached, fingerprint, true, forceFull))
 		}
 	}
 
 	plan := s.adapter.DetectChanges(state.Info, state.Scanned, state.Previous)
+	plan = s.enrichPlan(state, finalizePlan(plan, fingerprint, false, forceFull))
 	if state.HasCurrentSnapshot {
 		_ = state.Store.SaveChangePlan(state.CurrentSnapshot.ID, fingerprint, plan)
 	}
-	return finalizePlan(plan, fingerprint, false, forceFull)
+	return plan
 }
 
 func (s *service) ChangedNow(state ProjectState) int {
@@ -201,17 +203,7 @@ func (s *service) applySnapshot(state ProjectState, kind, note string, forceFull
 }
 
 func (s *service) commitSnapshot(state ProjectState, current storage.SnapshotInfo, hasCurrent bool, plan codebase.ChangePlan, kind, note string) (storage.SnapshotInfo, error) {
-	patterns := plan.ImpactedPackages
-	if !plan.FullReindex && hasCurrent && len(patterns) > 0 {
-		reverse, err := state.Store.ReverseDependencies(current.ID, patterns)
-		if err != nil {
-			return storage.SnapshotInfo{}, err
-		}
-		patterns = mergeStringLists(patterns, reverse)
-	}
-	if plan.FullReindex {
-		patterns = nil
-	}
+	patterns := s.analysisPatterns(state, current, hasCurrent, plan)
 
 	analyzeStarted := time.Now()
 	result, err := s.adapter.Analyze(state.Info, codebase.ScanMap(state.Scanned), patterns)
@@ -221,9 +213,15 @@ func (s *service) commitSnapshot(state ProjectState, current storage.SnapshotInf
 	analyzeDuration := time.Since(analyzeStarted)
 
 	snapshot, err := state.Store.CommitSnapshotWithTelemetry(kind, note, state.Scanned, result, plan.Changes, plan.FullReindex, storage.SnapshotCommitTelemetry{
-		ScannedFiles:    len(state.Scanned),
-		ScanDuration:    state.ScanDuration,
-		AnalyzeDuration: analyzeDuration,
+		ScannedFiles:     len(state.Scanned),
+		ScanDuration:     state.ScanDuration,
+		AnalyzeDuration:  analyzeDuration,
+		PlanMode:         plan.Metrics.Mode,
+		DirectPackages:   len(plan.ImpactedPackages),
+		ExpandedPackages: len(plan.ExpandedPackages),
+		ReusedPackages:   plan.Metrics.ReusedPackageCount,
+		ReusePercent:     plan.Metrics.ReusePercent,
+		PlanCacheHit:     plan.CacheHit,
 	})
 	if err != nil {
 		return storage.SnapshotInfo{}, err
@@ -269,6 +267,88 @@ func shouldAutoRefresh(commandName string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *service) enrichPlan(state ProjectState, plan codebase.ChangePlan) codebase.ChangePlan {
+	plan.ExpandedPackages = s.analysisPatterns(state, state.CurrentSnapshot, state.HasCurrentSnapshot, plan)
+	plan.Metrics = s.planMetrics(state, plan)
+	return plan
+}
+
+func (s *service) analysisPatterns(state ProjectState, current storage.SnapshotInfo, hasCurrent bool, plan codebase.ChangePlan) []string {
+	if plan.FullReindex {
+		return nil
+	}
+	patterns := append([]string(nil), plan.ImpactedPackages...)
+	if !hasCurrent || len(patterns) == 0 {
+		return patterns
+	}
+	reverse, err := state.Store.ReverseDependencies(current.ID, patterns)
+	if err != nil {
+		return patterns
+	}
+	return mergeStringLists(patterns, reverse)
+}
+
+func (s *service) planMetrics(state ProjectState, plan codebase.ChangePlan) codebase.IncrementalMetrics {
+	metrics := codebase.IncrementalMetrics{
+		ChangedFiles:       plan.Changes.Count(),
+		DirectPackageCount: len(plan.ImpactedPackages),
+	}
+	totalPackages := state.CurrentSnapshot.TotalPackages
+	if totalPackages <= 0 {
+		totalPackages = len(uniquePlanPackages(state.Scanned, state.Previous))
+	}
+
+	switch {
+	case plan.FullReindex:
+		metrics.Mode = "full"
+		metrics.ExpandedPackageCount = totalPackages
+	case plan.Changes.Count() == 0:
+		metrics.Mode = "noop"
+		metrics.ExpandedPackageCount = 0
+	default:
+		metrics.Mode = "partial"
+		metrics.ExpandedPackageCount = len(plan.ExpandedPackages)
+	}
+
+	if totalPackages > 0 {
+		reused := totalPackages - metrics.ExpandedPackageCount
+		if reused < 0 {
+			reused = 0
+		}
+		metrics.ReusedPackageCount = reused
+		metrics.ReusePercent = int(float64(reused) * 100 / float64(totalPackages))
+	}
+	if metrics.Mode == "noop" && totalPackages > 0 {
+		metrics.ReusedPackageCount = totalPackages
+		metrics.ReusePercent = 100
+	}
+	return metrics
+}
+
+func uniquePlanPackages(scanned []codebase.ScanFile, previous map[string]codebase.PreviousFile) []string {
+	packages := make(map[string]struct{})
+	for _, file := range scanned {
+		if value := strings.TrimSpace(file.PackageImportPath); value != "" {
+			packages[value] = struct{}{}
+		}
+	}
+	for _, file := range previous {
+		if value := strings.TrimSpace(file.PackageImportPath); value != "" {
+			packages[value] = struct{}{}
+		}
+	}
+	return sortedKeys(packages)
+}
+
+func sortedKeys(values map[string]struct{}) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func mergeStringLists(parts ...[]string) []string {

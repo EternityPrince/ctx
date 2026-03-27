@@ -16,105 +16,6 @@ import (
 	"github.com/vladimirkasterin/ctx/internal/storage"
 )
 
-func explainChangePlan(state core.ProjectState, plan codebase.ChangePlan) (string, error) {
-	var b strings.Builder
-	currentByPath := codebase.ScanMap(state.Scanned)
-
-	b.WriteString("Explain:\n")
-	b.WriteString(fmt.Sprintf("  - full reindex: %t\n", plan.FullReindex))
-	b.WriteString(fmt.Sprintf("  - reason: %s\n", strings.TrimSpace(plan.Reason)))
-	b.WriteString(fmt.Sprintf("  - change cache: %t\n", plan.CacheHit))
-	b.WriteString(fmt.Sprintf("  - changes: added=%d changed=%d deleted=%d\n", len(plan.Changes.Added), len(plan.Changes.Changed), len(plan.Changes.Deleted)))
-
-	if plan.Changes.Count() > 0 {
-		b.WriteString("  - changed paths:\n")
-		for _, relPath := range plan.Changes.Added {
-			b.WriteString(fmt.Sprintf("    - %s (added, %s)\n", relPath, explainChangedPath(relPath, currentByPath, state.Previous)))
-		}
-		for _, relPath := range plan.Changes.Changed {
-			b.WriteString(fmt.Sprintf("    - %s (changed, %s)\n", relPath, explainChangedPath(relPath, currentByPath, state.Previous)))
-		}
-		for _, relPath := range plan.Changes.Deleted {
-			b.WriteString(fmt.Sprintf("    - %s (deleted, %s)\n", relPath, explainDeletedPath(relPath, state.Previous)))
-		}
-	}
-
-	if len(plan.ImpactedPackages) > 0 {
-		b.WriteString("  - directly impacted packages:\n")
-		for _, pkg := range plan.ImpactedPackages {
-			b.WriteString(fmt.Sprintf("    - %s\n", pkg))
-		}
-	}
-
-	current, ok, err := state.Store.CurrentSnapshot()
-	if err != nil {
-		return "", err
-	}
-	if ok && !plan.FullReindex && len(plan.ImpactedPackages) > 0 {
-		reverse, err := state.Store.ReverseDependencies(current.ID, plan.ImpactedPackages)
-		if err != nil {
-			return "", err
-		}
-		if len(reverse) > 0 {
-			b.WriteString("  - additional packages via reverse deps:\n")
-			for _, pkg := range reverse {
-				b.WriteString(fmt.Sprintf("    - %s\n", pkg))
-			}
-		}
-	}
-
-	return b.String(), nil
-}
-
-func explainChangedPath(relPath string, current map[string]codebase.ScanFile, previous map[string]codebase.PreviousFile) string {
-	if file, ok := current[relPath]; ok {
-		if file.IsModule {
-			switch {
-			case filepath.Base(relPath) == "go.sum":
-				return "dependency checksum file -> no reindex"
-			case filepath.Base(relPath) == "Cargo.lock":
-				return "dependency lockfile -> no reindex"
-			case codebase.IsPythonProjectFile(filepath.Base(relPath)):
-				return "python project metadata -> no reindex"
-			case strings.TrimSpace(file.Identity) != "":
-				return "project manifest for " + strings.TrimSpace(file.Identity) + " -> manifest-aware invalidation"
-			default:
-				return "project/workspace manifest -> manifest-aware invalidation"
-			}
-		}
-		if pkg := strings.TrimSpace(file.PackageImportPath); pkg != "" {
-			return "package " + pkg
-		}
-	}
-	if prev, ok := previous[relPath]; ok && strings.TrimSpace(prev.PackageImportPath) != "" {
-		return "package " + strings.TrimSpace(prev.PackageImportPath)
-	}
-	return "package unknown -> conservative handling"
-}
-
-func explainDeletedPath(relPath string, previous map[string]codebase.PreviousFile) string {
-	switch {
-	case filepath.Base(relPath) == "go.sum":
-		return "dependency checksum file -> no reindex"
-	case filepath.Base(relPath) == "Cargo.lock":
-		return "dependency lockfile -> no reindex"
-	case codebase.IsPythonProjectFile(filepath.Base(relPath)):
-		return "python project metadata -> no reindex"
-	}
-	if prev, ok := previous[relPath]; ok {
-		if pkg := strings.TrimSpace(prev.Identity); pkg != "" && (codebase.IsGoProjectFile(relPath) || codebase.IsRustProjectFile(relPath)) {
-			return "project manifest for " + pkg + " -> manifest-aware invalidation"
-		}
-		if pkg := strings.TrimSpace(prev.PackageImportPath); pkg != "" {
-			if codebase.IsGoProjectFile(relPath) || codebase.IsRustProjectFile(relPath) {
-				return "project manifest for " + pkg + " -> manifest-aware invalidation"
-			}
-			return "package " + pkg
-		}
-	}
-	return "package unknown -> full reindex"
-}
-
 func runDoctor(command cli.Command, stdout io.Writer) error {
 	root := command.Root
 	cfg, cfgErr := config.LoadProject(root)
@@ -199,11 +100,13 @@ func runDoctor(command cli.Command, stdout io.Writer) error {
 	}
 	_, _ = fmt.Fprintf(stdout, "Incremental: %s\nChange cache: %s (%s)\n", incremental, cacheLabel, shortFingerprint(plan.Fingerprint))
 
-	explained, err := explainChangePlan(state, plan)
+	explained, err := buildChangePlanExplain(state, plan)
 	if err != nil {
 		return err
 	}
-	_, _ = io.WriteString(stdout, explained)
+	if err := renderHumanExplainSection(stdout, newPalette(), explained); err != nil {
+		return err
+	}
 
 	_, _ = fmt.Fprintf(stdout, "Ignore files: .gitignore=%t .ctxignore=%t .ctxconfig=%t\n", fileExists(filepath.Join(info.Root, ".gitignore")), fileExists(filepath.Join(info.Root, ".ctxignore")), hasConfig)
 	if hasConfig {
@@ -246,7 +149,7 @@ func doctorIncrementalDiagnosis(state core.ProjectState, status storage.ProjectS
 			}
 			reverseCount = len(reverse)
 		}
-		return fmt.Sprintf("partial update ready (changed=%d direct_packages=%d reverse_packages=%d)", plan.Changes.Count(), len(plan.ImpactedPackages), reverseCount), nil
+		return fmt.Sprintf("partial update ready (changed=%d direct_packages=%d reverse_packages=%d expanded_packages=%d reused=%d%%)", plan.Changes.Count(), len(plan.ImpactedPackages), reverseCount, plan.Metrics.ExpandedPackageCount, plan.Metrics.ReusePercent), nil
 	}
 }
 

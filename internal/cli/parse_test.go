@@ -83,7 +83,7 @@ func TestParseDoctorCommand(t *testing.T) {
 }
 
 func TestParseWatchCommand(t *testing.T) {
-	command, err := Parse([]string{"watch", ".", "--interval", "250ms", "--cycles", "3", "--explain"})
+	command, err := Parse([]string{"watch", ".", "--interval", "250ms", "--debounce", "500ms", "--cycles", "3", "--quiet", "--explain"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
@@ -93,8 +93,14 @@ func TestParseWatchCommand(t *testing.T) {
 	if command.WatchInterval != 250*time.Millisecond {
 		t.Fatalf("expected watch interval to be parsed, got %s", command.WatchInterval)
 	}
+	if command.WatchDebounce != 500*time.Millisecond {
+		t.Fatalf("expected watch debounce to be parsed, got %s", command.WatchDebounce)
+	}
 	if command.WatchCycles != 3 {
 		t.Fatalf("expected watch cycles=3, got %d", command.WatchCycles)
+	}
+	if !command.WatchQuiet {
+		t.Fatal("expected watch quiet flag to be parsed")
 	}
 	if !command.Explain {
 		t.Fatal("expected watch explain flag to be parsed")
@@ -102,7 +108,7 @@ func TestParseWatchCommand(t *testing.T) {
 }
 
 func TestParseSymbolCommand(t *testing.T) {
-	command, err := Parse([]string{"symbol", "CreateSession"})
+	command, err := Parse([]string{"symbol", "CreateSession", "--explain"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
@@ -113,10 +119,13 @@ func TestParseSymbolCommand(t *testing.T) {
 	if command.Query != "CreateSession" {
 		t.Fatalf("expected query to be CreateSession, got %q", command.Query)
 	}
+	if !command.Explain {
+		t.Fatal("expected symbol explain flag to be parsed")
+	}
 }
 
 func TestParseImpactCommand(t *testing.T) {
-	command, err := Parse([]string{"impact", "CreateSession", "--depth", "4"})
+	command, err := Parse([]string{"impact", "CreateSession", "--depth", "4", "--explain"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
@@ -129,6 +138,35 @@ func TestParseImpactCommand(t *testing.T) {
 	}
 	if command.Depth != 4 {
 		t.Fatalf("expected depth=4, got %d", command.Depth)
+	}
+	if !command.Explain {
+		t.Fatal("expected impact explain flag to be parsed")
+	}
+}
+
+func TestParseDiffHistoryAndCoChangeExplain(t *testing.T) {
+	diff, err := Parse([]string{"diff", "--from", "1", "--to", "2", "--explain"})
+	if err != nil {
+		t.Fatalf("Parse diff returned error: %v", err)
+	}
+	if diff.Name != "diff" || !diff.Explain {
+		t.Fatalf("expected diff explain flag to be parsed, got %+v", diff)
+	}
+
+	history, err := Parse([]string{"history", "CreateSession", "--explain"})
+	if err != nil {
+		t.Fatalf("Parse history returned error: %v", err)
+	}
+	if history.Name != "history" || !history.Explain {
+		t.Fatalf("expected history explain flag to be parsed, got %+v", history)
+	}
+
+	cochange, err := Parse([]string{"cochange", "CreateSession", "--explain"})
+	if err != nil {
+		t.Fatalf("Parse cochange returned error: %v", err)
+	}
+	if cochange.Name != "cochange" || !cochange.Explain {
+		t.Fatalf("expected cochange explain flag to be parsed, got %+v", cochange)
 	}
 }
 

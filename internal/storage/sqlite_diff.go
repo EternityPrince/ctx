@@ -3,6 +3,8 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 type packageDiffMetrics struct {
@@ -89,6 +91,7 @@ func (s *Store) Diff(fromID, toID int64) (DiffView, error) {
 	if diff.RemovedPackageDeps, err = s.diffPackageDeps(fromID, toID, "removed"); err != nil {
 		return DiffView{}, err
 	}
+	diff.ImpactedSymbols = buildImpactedSymbols(diff)
 
 	return diff, nil
 }
@@ -299,6 +302,168 @@ func (s *Store) changedPackages(fromID, toID int64) ([]ChangedPackage, error) {
 
 	sortChangedPackages(result)
 	return result, nil
+}
+
+func buildImpactedSymbols(diff DiffView) []SymbolImpactDelta {
+	byQName := make(map[string]*SymbolImpactDelta)
+	ensure := func(qname, pkg, file string) *SymbolImpactDelta {
+		qname = strings.TrimSpace(qname)
+		if qname == "" {
+			return nil
+		}
+		item, ok := byQName[qname]
+		if !ok {
+			item = &SymbolImpactDelta{
+				QName:             qname,
+				PackageImportPath: strings.TrimSpace(pkg),
+				FilePath:          strings.TrimSpace(file),
+			}
+			byQName[qname] = item
+		}
+		if item.PackageImportPath == "" {
+			item.PackageImportPath = strings.TrimSpace(pkg)
+		}
+		if item.FilePath == "" {
+			item.FilePath = strings.TrimSpace(file)
+		}
+		return item
+	}
+	addWhy := func(item *SymbolImpactDelta, why string) {
+		if item == nil {
+			return
+		}
+		why = strings.TrimSpace(why)
+		if why == "" {
+			return
+		}
+		for _, existing := range item.Why {
+			if existing == why {
+				return
+			}
+		}
+		item.Why = append(item.Why, why)
+	}
+
+	for _, symbol := range diff.AddedSymbols {
+		item := ensure(symbol.QName, symbol.PackageImportPath, symbol.FilePath)
+		if item == nil {
+			continue
+		}
+		item.Status = "added"
+		addWhy(item, "new symbol introduced")
+	}
+	for _, symbol := range diff.RemovedSymbols {
+		item := ensure(symbol.QName, symbol.PackageImportPath, symbol.FilePath)
+		if item == nil {
+			continue
+		}
+		item.Status = "removed"
+		addWhy(item, "symbol removed")
+	}
+	for _, symbol := range diff.ChangedSymbols {
+		item := ensure(symbol.QName, symbol.ToPackageImportPath, symbol.ToFilePath)
+		if item == nil {
+			item = ensure(symbol.QName, symbol.FromPackageImportPath, symbol.FromFilePath)
+		}
+		if item == nil {
+			continue
+		}
+		if item.Status == "" {
+			item.Status = "changed"
+		}
+		item.ContractChanged = item.ContractChanged || symbol.ContractChanged
+		item.Moved = item.Moved || symbol.Moved
+		if symbol.ContractChanged {
+			addWhy(item, "signature changed")
+		}
+		if symbol.Moved {
+			addWhy(item, "declaration moved")
+		}
+	}
+	for _, call := range diff.AddedCalls {
+		if item := ensure(call.CallerQName, "", call.FilePath); item != nil {
+			item.AddedCallees++
+			addWhy(item, "new outgoing call edge")
+		}
+		if item := ensure(call.CalleeQName, "", call.FilePath); item != nil {
+			item.AddedCallers++
+			addWhy(item, "new incoming caller")
+		}
+	}
+	for _, call := range diff.RemovedCalls {
+		if item := ensure(call.CallerQName, "", call.FilePath); item != nil {
+			item.RemovedCallees++
+			addWhy(item, "outgoing call edge removed")
+		}
+		if item := ensure(call.CalleeQName, "", call.FilePath); item != nil {
+			item.RemovedCallers++
+			addWhy(item, "incoming caller removed")
+		}
+	}
+	for _, ref := range diff.AddedRefs {
+		if item := ensure(ref.ToQName, "", ref.FilePath); item != nil {
+			item.AddedRefsIn++
+			addWhy(item, "new inbound reference")
+		}
+		if item := ensure(ref.FromQName, ref.FromPackageImportPath, ref.FilePath); item != nil {
+			item.AddedRefsOut++
+			addWhy(item, "new outbound reference")
+		}
+	}
+	for _, ref := range diff.RemovedRefs {
+		if item := ensure(ref.ToQName, "", ref.FilePath); item != nil {
+			item.RemovedRefsIn++
+			addWhy(item, "inbound reference removed")
+		}
+		if item := ensure(ref.FromQName, ref.FromPackageImportPath, ref.FilePath); item != nil {
+			item.RemovedRefsOut++
+			addWhy(item, "outbound reference removed")
+		}
+	}
+	for _, link := range diff.AddedTestLinks {
+		if item := ensure(link.SymbolQName, "", ""); item != nil {
+			item.AddedTests++
+			addWhy(item, "new related test link")
+		}
+	}
+	for _, link := range diff.RemovedTestLinks {
+		if item := ensure(link.SymbolQName, "", ""); item != nil {
+			item.RemovedTests++
+			addWhy(item, "related test link removed")
+		}
+	}
+
+	items := make([]SymbolImpactDelta, 0, len(byQName))
+	for _, item := range byQName {
+		item.BlastRadius = item.AddedCallers + item.RemovedCallers + item.AddedCallees + item.RemovedCallees +
+			item.AddedRefsIn + item.RemovedRefsIn + item.AddedRefsOut + item.RemovedRefsOut +
+			item.AddedTests + item.RemovedTests
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if symbolDeltaScore(items[i]) != symbolDeltaScore(items[j]) {
+			return symbolDeltaScore(items[i]) > symbolDeltaScore(items[j])
+		}
+		return items[i].QName < items[j].QName
+	})
+	return items
+}
+
+func symbolDeltaScore(item SymbolImpactDelta) int {
+	score := item.BlastRadius
+	switch item.Status {
+	case "added", "removed":
+		score += 12
+	case "changed":
+		score += 8
+	}
+	if item.ContractChanged {
+		score += 8
+	}
+	if item.Moved {
+		score += 4
+	}
+	return score
 }
 
 func sortChangedPackages(values []ChangedPackage) {

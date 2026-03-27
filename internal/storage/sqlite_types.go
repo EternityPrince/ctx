@@ -96,13 +96,36 @@ type ImpactNode struct {
 	Depth  int
 }
 
+type ImpactPackageReason struct {
+	PackageImportPath string
+	Why               []string
+}
+
+type ImpactFileReason struct {
+	FilePath string
+	Why      []string
+}
+
 type ImpactView struct {
 	Target            SymbolMatch
 	Package           PackageSummary
 	DirectCallers     []RelatedSymbolView
 	TransitiveCallers []ImpactNode
+	InboundRefs       []RefView
+	ReferencePackages []string
 	CallerPackages    []string
+	BlastPackages     []string
+	ReferencePackageReasons []ImpactPackageReason
+	CallerPackageReasons    []ImpactPackageReason
+	BlastPackageReasons     []ImpactPackageReason
+	BlastFileReasons   []ImpactFileReason
+	ExpansionWhy       []string
+	BlastFiles        []string
+	EmpiricalFiles    []CoChangeItem
+	EmpiricalPackages []CoChangeItem
 	Tests             []TestView
+	RecentDelta       SymbolImpactDelta
+	HasRecentDelta    bool
 }
 
 type SymbolView struct {
@@ -183,6 +206,27 @@ type PackageDepChange struct {
 	ToPackageImportPath   string
 }
 
+type SymbolImpactDelta struct {
+	QName             string
+	PackageImportPath string
+	FilePath          string
+	Status            string
+	ContractChanged   bool
+	Moved             bool
+	AddedCallers      int
+	RemovedCallers    int
+	AddedCallees      int
+	RemovedCallees    int
+	AddedRefsIn       int
+	RemovedRefsIn     int
+	AddedRefsOut      int
+	RemovedRefsOut    int
+	AddedTests        int
+	RemovedTests      int
+	BlastRadius       int
+	Why               []string
+}
+
 type SymbolHistoryEvent struct {
 	FromSnapshotID  int64
 	ToSnapshot      SnapshotInfo
@@ -258,4 +302,5 @@ type DiffView struct {
 	RemovedTestLinks   []TestLinkChange
 	AddedPackageDeps   []PackageDepChange
 	RemovedPackageDeps []PackageDepChange
+	ImpactedSymbols    []SymbolImpactDelta
 }

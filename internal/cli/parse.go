@@ -31,7 +31,9 @@ type Command struct {
 	SnapshotIDs   []int64
 	SnapshotLimit int
 	WatchInterval time.Duration
+	WatchDebounce time.Duration
 	WatchCycles   int
+	WatchQuiet    bool
 	Report        config.Options
 }
 
@@ -238,7 +240,9 @@ func parseSymbol(args []string) (Command, error) {
 	var root string
 	var ai bool
 	var human bool
+	var explain bool
 	fs.StringVar(&root, "root", ".", "project root or any path inside the project")
+	fs.BoolVar(&explain, "explain", false, "show why this symbol matters and where the strongest evidence comes from")
 	bindOutputModeFlags(fs, &ai, &human)
 	fs.Usage = func() {}
 
@@ -272,6 +276,7 @@ func parseSymbol(args []string) (Command, error) {
 		Name:       "symbol",
 		Root:       absRoot,
 		Query:      query,
+		Explain:    explain,
 		OutputMode: mode,
 	}, nil
 }
@@ -290,8 +295,10 @@ func parseImpact(args []string) (Command, error) {
 	var depth int
 	var ai bool
 	var human bool
+	var explain bool
 	fs.StringVar(&root, "root", ".", "project root or any path inside the project")
 	fs.IntVar(&depth, "depth", 3, "transitive caller depth")
+	fs.BoolVar(&explain, "explain", false, "show why packages/files/tests are included in this blast radius")
 	bindOutputModeFlags(fs, &ai, &human)
 	fs.Usage = func() {}
 
@@ -326,6 +333,7 @@ func parseImpact(args []string) (Command, error) {
 		Root:       absRoot,
 		Query:      query,
 		Depth:      depth,
+		Explain:    explain,
 		OutputMode: mode,
 	}, nil
 }
@@ -381,11 +389,15 @@ func parseWatch(args []string) (Command, error) {
 	fs.SetOutput(ioDiscard{})
 
 	var interval time.Duration
+	var debounce time.Duration
 	var cycles int
 	var explain bool
+	var quiet bool
 	fs.DurationVar(&interval, "interval", 2*time.Second, "poll interval between watch cycles")
+	fs.DurationVar(&debounce, "debounce", 250*time.Millisecond, "coalesce a burst of filesystem events before reindexing")
 	fs.IntVar(&cycles, "cycles", 0, "number of watch cycles to run before exiting (0 means run until interrupted)")
 	fs.BoolVar(&explain, "explain", false, "print incremental plan details when watch applies an update")
+	fs.BoolVar(&quiet, "quiet", false, "suppress idle watch cycles")
 	fs.Usage = func() {}
 
 	if err := fs.Parse(args); err != nil {
@@ -402,6 +414,9 @@ func parseWatch(args []string) (Command, error) {
 	if interval <= 0 {
 		return Command{}, usageError(errors.New("watch interval must be greater than zero"))
 	}
+	if debounce < 0 {
+		return Command{}, usageError(errors.New("watch debounce cannot be negative"))
+	}
 	if cycles < 0 {
 		return Command{}, usageError(errors.New("watch cycles cannot be negative"))
 	}
@@ -417,7 +432,9 @@ func parseWatch(args []string) (Command, error) {
 		Explain:       explain,
 		OutputMode:    OutputHuman,
 		WatchInterval: interval,
+		WatchDebounce: debounce,
 		WatchCycles:   cycles,
+		WatchQuiet:    quiet,
 	}, nil
 }
 
@@ -526,9 +543,11 @@ func parseDiff(args []string) (Command, error) {
 	var root string
 	var fromID int64
 	var toID int64
+	var explain bool
 	fs.StringVar(&root, "root", ".", "project root or any path inside the project")
 	fs.Int64Var(&fromID, "from", 0, "from snapshot id")
 	fs.Int64Var(&toID, "to", 0, "to snapshot id")
+	fs.BoolVar(&explain, "explain", false, "show how snapshot deltas are interpreted and ranked")
 	fs.Usage = func() {}
 
 	if err := fs.Parse(args); err != nil {
@@ -550,6 +569,7 @@ func parseDiff(args []string) (Command, error) {
 		Root:         absRoot,
 		FromSnapshot: fromID,
 		ToSnapshot:   toID,
+		Explain:      explain,
 	}, nil
 }
 
@@ -567,10 +587,12 @@ func parseHistory(args []string) (Command, error) {
 	var limit int
 	var packageScope bool
 	var symbolScope bool
+	var explain bool
 	fs.StringVar(&root, "root", ".", "project root or any path inside the project")
 	fs.IntVar(&limit, "limit", 8, "number of recent history events to show")
 	fs.BoolVar(&packageScope, "package", false, "treat the query as a package")
 	fs.BoolVar(&symbolScope, "symbol", false, "treat the query as a symbol")
+	fs.BoolVar(&explain, "explain", false, "show how history events are derived from stored snapshot diffs")
 	fs.Usage = func() {}
 
 	if err := fs.Parse(args); err != nil {
@@ -603,11 +625,12 @@ func parseHistory(args []string) (Command, error) {
 	}
 
 	return Command{
-		Name:  "history",
-		Root:  absRoot,
-		Query: query,
-		Scope: scope,
-		Limit: limit,
+		Name:    "history",
+		Root:    absRoot,
+		Query:   query,
+		Scope:   scope,
+		Limit:   limit,
+		Explain: explain,
 	}, nil
 }
 
@@ -625,10 +648,12 @@ func parseCoChange(args []string) (Command, error) {
 	var limit int
 	var packageScope bool
 	var symbolScope bool
+	var explain bool
 	fs.StringVar(&root, "root", ".", "project root or any path inside the project")
 	fs.IntVar(&limit, "limit", 8, "number of co-change candidates to show")
 	fs.BoolVar(&packageScope, "package", false, "treat the query as a package")
 	fs.BoolVar(&symbolScope, "symbol", false, "treat the query as a symbol")
+	fs.BoolVar(&explain, "explain", false, "show how co-change candidates are scored and what the limits are")
 	fs.Usage = func() {}
 
 	if err := fs.Parse(args); err != nil {
@@ -661,11 +686,12 @@ func parseCoChange(args []string) (Command, error) {
 	}
 
 	return Command{
-		Name:  "cochange",
-		Root:  absRoot,
-		Query: query,
-		Scope: scope,
-		Limit: limit,
+		Name:    "cochange",
+		Root:    absRoot,
+		Query:   query,
+		Scope:   scope,
+		Limit:   limit,
+		Explain: explain,
 	}, nil
 }
 
@@ -1019,14 +1045,14 @@ Usage:
   ctx snapshots limit <n> [--root path|--project id]
   ctx snapshot [id] [--root path] [-h|-human|-a|-ai]
   ctx shell [query] [--root path]
-  ctx watch [path] [--interval 2s] [--cycles N] [--explain]
+  ctx watch [path] [--interval 2s] [--debounce 250ms] [--cycles N] [--quiet] [--explain]
   ctx projects [list|rm|prune|status]
   ctx projects snapshots <project> [list|rm|limit] ...
 
 Core Commands:
   index      create or rebuild a snapshot-backed index for the current Go, Python, Rust, or mixed project
   update     incrementally refresh the index after local code changes
-  watch      keep the snapshot fresh by polling for local changes and applying incremental updates
+  watch      keep the snapshot fresh with native filesystem events when available, otherwise polling, and apply incremental updates
   status     show snapshot freshness, inventory, and latest index timing telemetry
   doctor     inspect project detection, config, schema/storage health, and incremental readiness diagnostics
   report     summarize the project or deterministic slices like risky/seams/hotspots/low-tested/changed-since, with optional provenance
@@ -1064,7 +1090,7 @@ Runtime Notes:
   Python analysis requires python3 on PATH.
   Rust analysis is local and practical-first: files/packages/tests plus best-effort symbols today, not a full typed semantic graph yet.
   Incremental invalidation is language-aware: lockfiles and some metadata changes no longer force full reindex when the local indexed graph is unchanged.
-  watch prefers native filesystem events on macOS and falls back to polling elsewhere or when native setup fails.
+  watch prefers native filesystem events on macOS, Linux, and Windows, coalesces event bursts with --debounce, and falls back to polling elsewhere or when native setup fails.
   .ctxconfig can supply global or profile-specific settings for dump/index/report and path include/exclude rules.
   search and grep operate on indexed files from the current snapshot.
 

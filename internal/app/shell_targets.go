@@ -34,7 +34,11 @@ func (s *shellSession) showFileJourney(query string) error {
 
 	s.currentMode = "file"
 	s.currentFile = relPath
-	if focusSymbolKey == "" {
+	if focusView != nil {
+		s.currentKey = focusView.Symbol.SymbolKey
+		s.currentQName = focusView.Symbol.QName
+	} else {
+		s.currentKey = ""
 		s.currentQName = ""
 	}
 	if err := s.beginScreen("File Journey"); err != nil {

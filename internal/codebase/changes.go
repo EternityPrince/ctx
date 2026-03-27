@@ -76,12 +76,14 @@ func MergeChangePlans(changes ChangeSet, plans ...ChangePlan) ChangePlan {
 	impacted := make(map[string]struct{})
 	fullReindex := false
 	reasons := make([]string, 0, len(plans))
+	manifestChanges := make([]ManifestDelta, 0, len(plans))
 
 	for _, plan := range plans {
 		fullReindex = fullReindex || plan.FullReindex
 		for _, pkg := range plan.ImpactedPackages {
 			impacted[pkg] = struct{}{}
 		}
+		manifestChanges = append(manifestChanges, plan.ManifestChanges...)
 		if value := strings.TrimSpace(plan.Reason); value != "" {
 			reasons = append(reasons, value)
 		}
@@ -101,6 +103,7 @@ func MergeChangePlans(changes ChangeSet, plans ...ChangePlan) ChangePlan {
 	return ChangePlan{
 		Changes:          changes,
 		ImpactedPackages: sortedSetKeys(impacted),
+		ManifestChanges:  manifestChanges,
 		FullReindex:      fullReindex,
 		Reason:           joinPlanReasons(reasons),
 	}

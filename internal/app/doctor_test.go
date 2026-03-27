@@ -37,7 +37,7 @@ func TestRunStatusExplainShowsCurrentPlanState(t *testing.T) {
 		t.Fatalf("runStatus returned error: %v", err)
 	}
 	text := stripANSICodes(out.String())
-	if !strings.Contains(text, "Explain:") || !strings.Contains(text, "changes: added=0 changed=0 deleted=0") || !strings.Contains(text, "Timings: scan=") {
+	if !strings.Contains(text, "Explain") || !strings.Contains(text, "Changes: added=0 changed=0 deleted=0") || !strings.Contains(text, "Timings: scan=") {
 		t.Fatalf("expected explainability details in status output, got:\n%s", text)
 	}
 }
@@ -71,7 +71,7 @@ func TestRunUpdateExplainShowsImpactedPackages(t *testing.T) {
 		t.Fatalf("runIndexLike returned error: %v", err)
 	}
 	text := stripANSICodes(out.String())
-	if !strings.Contains(text, "Explain:") || !strings.Contains(text, "directly impacted packages:") || !strings.Contains(text, "demo") || !strings.Contains(text, "scan_ms=") {
+	if !strings.Contains(text, "Explain") || !strings.Contains(text, "Directly impacted packages") || !strings.Contains(text, "demo") || !strings.Contains(text, "scan_ms=") {
 		t.Fatalf("expected explainability details in status output, got:\n%s", text)
 	}
 }

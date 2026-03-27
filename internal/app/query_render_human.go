@@ -425,6 +425,61 @@ func renderHumanStringList(stdout io.Writer, p palette, title string, values []s
 	return renderMoreLine(stdout, len(values), limit)
 }
 
+func renderHumanPackageReasons(stdout io.Writer, p palette, modulePath, title string, values []storage.ImpactPackageReason, limit int) error {
+	if _, err := fmt.Fprintf(stdout, "%s (%d)\n", p.section(title), len(values)); err != nil {
+		return err
+	}
+	if len(values) == 0 {
+		return renderHumanEmpty(stdout, p)
+	}
+	for _, value := range values[:min(limit, len(values))] {
+		if _, err := fmt.Fprintf(stdout, "  %s\n", shortenQName(modulePath, value.PackageImportPath)); err != nil {
+			return err
+		}
+		for _, why := range value.Why {
+			if _, err := fmt.Fprintf(stdout, "    %s %s\n", p.label("why:"), why); err != nil {
+				return err
+			}
+		}
+	}
+	return renderMoreLine(stdout, len(values), limit)
+}
+
+func renderHumanFileReasons(stdout io.Writer, p palette, title string, values []storage.ImpactFileReason, limit int) error {
+	if _, err := fmt.Fprintf(stdout, "%s (%d)\n", p.section(title), len(values)); err != nil {
+		return err
+	}
+	if len(values) == 0 {
+		return renderHumanEmpty(stdout, p)
+	}
+	for _, value := range values[:min(limit, len(values))] {
+		if _, err := fmt.Fprintf(stdout, "  %s\n", value.FilePath); err != nil {
+			return err
+		}
+		for _, why := range value.Why {
+			if _, err := fmt.Fprintf(stdout, "    %s %s\n", p.label("why:"), why); err != nil {
+				return err
+			}
+		}
+	}
+	return renderMoreLine(stdout, len(values), limit)
+}
+
+func renderHumanCoChangeItems(stdout io.Writer, p palette, title string, values []storage.CoChangeItem, limit int) error {
+	if _, err := fmt.Fprintf(stdout, "%s (%d)\n", p.section(title), len(values)); err != nil {
+		return err
+	}
+	if len(values) == 0 {
+		return renderHumanEmpty(stdout, p)
+	}
+	for _, value := range values[:min(limit, len(values))] {
+		if _, err := fmt.Fprintf(stdout, "  %s\n", formatCoChangeItem(value)); err != nil {
+			return err
+		}
+	}
+	return renderMoreLine(stdout, len(values), limit)
+}
+
 func renderHumanImpactSummary(stdout io.Writer, p palette, impact string, callers, refs, tests, reverseDeps int) error {
 	if _, err := fmt.Fprintf(
 		stdout,

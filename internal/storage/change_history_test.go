@@ -1,6 +1,9 @@
 package storage
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDiffIncludesSemanticChangesAndRelationships(t *testing.T) {
 	store := openTestStore(t)
@@ -52,6 +55,100 @@ func TestDiffIncludesSemanticChangesAndRelationships(t *testing.T) {
 	}
 	if !hasPackageDep(diff.AddedPackageDeps, "example.com/project/pkg", "example.com/project/api") {
 		t.Fatalf("expected added package dependency pkg -> api, got %+v", diff.AddedPackageDeps)
+	}
+	runImpact := lookupSymbolImpactDelta(diff.ImpactedSymbols, "example.com/project/pkg.Service.Run")
+	if runImpact == nil {
+		t.Fatalf("expected impacted symbol for Service.Run, got %+v", diff.ImpactedSymbols)
+	}
+	if !runImpact.ContractChanged || !runImpact.Moved || runImpact.RemovedCallers == 0 {
+		t.Fatalf("expected symbol-aware impact for Service.Run, got %+v", runImpact)
+	}
+	helperImpact := lookupSymbolImpactDelta(diff.ImpactedSymbols, "example.com/project/pkg.helper")
+	if helperImpact == nil || helperImpact.AddedTests == 0 || helperImpact.BlastRadius == 0 {
+		t.Fatalf("expected helper symbol to show added/test-linked impact, got %+v", helperImpact)
+	}
+}
+
+func TestImpactViewIncludesRecentSymbolDelta(t *testing.T) {
+	store := openTestStore(t)
+	commitReportSnapshot(t, store, reportFixtureV1(), true)
+	commitReportSnapshot(t, store, reportFixtureV2(), false)
+	commitReportSnapshot(t, store, reportFixtureV3(), false)
+
+	view, err := store.LoadImpactView("example.com/project/pkg.Service.Run", 3)
+	if err != nil {
+		t.Fatalf("LoadImpactView returned error: %v", err)
+	}
+	if !view.HasRecentDelta {
+		t.Fatalf("expected recent delta on impact view, got %+v", view)
+	}
+	if view.RecentDelta.QName != "example.com/project/pkg.Service.Run" || !view.RecentDelta.ContractChanged || !view.RecentDelta.Moved {
+		t.Fatalf("unexpected recent delta: %+v", view.RecentDelta)
+	}
+}
+
+func TestImpactViewIncludesBlastRadiusAndEmpiricalSignals(t *testing.T) {
+	store := openTestStore(t)
+	commitReportSnapshot(t, store, reportFixtureV1(), true)
+	commitReportSnapshot(t, store, reportFixtureV2(), false)
+	commitReportSnapshot(t, store, reportFixtureV3(), false)
+
+	view, err := store.LoadImpactView("example.com/project/pkg.helper", 3)
+	if err != nil {
+		t.Fatalf("LoadImpactView returned error: %v", err)
+	}
+	if len(view.DirectCallers) == 0 || view.DirectCallers[0].Symbol.QName != "example.com/project/api.Handle" {
+		t.Fatalf("expected direct caller on helper impact view, got %+v", view.DirectCallers)
+	}
+	if len(view.InboundRefs) == 0 || view.InboundRefs[0].Symbol.PackageImportPath != "example.com/project/api" {
+		t.Fatalf("expected inbound ref package on helper impact view, got %+v", view.InboundRefs)
+	}
+	if !containsString(view.ReferencePackages, "example.com/project/api") {
+		t.Fatalf("expected reference packages to include api, got %+v", view.ReferencePackages)
+	}
+	if !containsString(view.BlastPackages, "example.com/project/api") {
+		t.Fatalf("expected blast packages to include api, got %+v", view.BlastPackages)
+	}
+	if !containsString(view.BlastFiles, "api/handler.go") || !containsString(view.BlastFiles, "pkg/service_test.go") {
+		t.Fatalf("expected blast files to include caller and test files, got %+v", view.BlastFiles)
+	}
+	if len(view.EmpiricalPackages) == 0 || view.EmpiricalPackages[0].Label != "example.com/project/api" {
+		t.Fatalf("expected empirical packages to include api, got %+v", view.EmpiricalPackages)
+	}
+	if len(view.EmpiricalFiles) == 0 || view.EmpiricalFiles[0].Label != "api/handler.go" {
+		t.Fatalf("expected empirical files to include api/handler.go, got %+v", view.EmpiricalFiles)
+	}
+	if len(view.ExpansionWhy) == 0 {
+		t.Fatalf("expected expansion why notes, got %+v", view)
+	}
+	apiPkg := findImpactPackageReason(view.BlastPackageReasons, "example.com/project/api")
+	if apiPkg == nil {
+		t.Fatalf("expected blast package reasons for api, got %+v", view.BlastPackageReasons)
+	}
+	for _, expected := range []string{
+		"reverse package dependency in local graph",
+		"empirical co-change signal",
+		"recent symbol delta changed caller surface",
+	} {
+		if !containsSubstring(apiPkg.Why, expected) {
+			t.Fatalf("expected %q in api blast package reasons, got %+v", expected, apiPkg.Why)
+		}
+	}
+	handlerFile := findImpactFileReason(view.BlastFileReasons, "api/handler.go")
+	if handlerFile == nil {
+		t.Fatalf("expected blast file reasons for api/handler.go, got %+v", view.BlastFileReasons)
+	}
+	for _, expected := range []string{
+		"static call edge from indexed call site",
+		"recent symbol delta changed caller surface",
+	} {
+		if !containsSubstring(handlerFile.Why, expected) {
+			t.Fatalf("expected %q in handler blast file reasons, got %+v", expected, handlerFile.Why)
+		}
+	}
+	testFile := findImpactFileReason(view.BlastFileReasons, "pkg/service_test.go")
+	if testFile == nil || !containsSubstring(testFile.Why, "recent symbol delta changed related test surface") {
+		t.Fatalf("expected recent test-surface reason on service_test.go, got %+v", view.BlastFileReasons)
 	}
 }
 
@@ -161,6 +258,42 @@ func findChangedPackage(values []ChangedPackage, importPath string) *ChangedPack
 		}
 	}
 	return nil
+}
+
+func lookupSymbolImpactDelta(values []SymbolImpactDelta, qname string) *SymbolImpactDelta {
+	for idx := range values {
+		if values[idx].QName == qname {
+			return &values[idx]
+		}
+	}
+	return nil
+}
+
+func findImpactPackageReason(values []ImpactPackageReason, importPath string) *ImpactPackageReason {
+	for idx := range values {
+		if values[idx].PackageImportPath == importPath {
+			return &values[idx]
+		}
+	}
+	return nil
+}
+
+func findImpactFileReason(values []ImpactFileReason, filePath string) *ImpactFileReason {
+	for idx := range values {
+		if values[idx].FilePath == filePath {
+			return &values[idx]
+		}
+	}
+	return nil
+}
+
+func containsSubstring(values []string, want string) bool {
+	for _, value := range values {
+		if strings.Contains(value, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasCall(values []CallEdgeChange, caller, callee string) bool {

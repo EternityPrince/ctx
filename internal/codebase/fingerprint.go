@@ -21,10 +21,11 @@ func ScanFingerprint(scanned []ScanFile) string {
 	for _, file := range files {
 		_, _ = fmt.Fprintf(
 			hash,
-			"%s\t%s\t%s\t%s\t%d\t%t\t%t\t%t\t%t\n",
+			"%s\t%s\t%s\t%s\t%s\t%d\t%t\t%t\t%t\t%t\n",
 			file.RelPath,
 			file.PackageImportPath,
 			file.Identity,
+			file.SemanticMeta,
 			file.Hash,
 			file.SizeBytes,
 			file.IsGo,

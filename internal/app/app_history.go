@@ -29,7 +29,7 @@ func runHistory(command cli.Command, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return renderHumanPackageHistory(stdout, state.Info.ModulePath, view)
+		return renderHumanPackageHistory(stdout, state.Info.ModulePath, view, command.Explain)
 	default:
 		match, found, err := resolveSingleSymbolQuery(stdout, state.Info.ModulePath, state.Store, command.Query)
 		if err != nil {
@@ -42,7 +42,7 @@ func runHistory(command cli.Command, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return renderHumanSymbolHistory(stdout, state.Info.Root, state.Info.ModulePath, view)
+		return renderHumanSymbolHistory(stdout, state.Info.Root, state.Info.ModulePath, view, command.Explain)
 	}
 }
 
@@ -66,7 +66,7 @@ func runCoChange(command cli.Command, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return renderHumanCoChange(stdout, state.Info.ModulePath, view)
+		return renderHumanCoChange(stdout, state.Info.ModulePath, view, command.Explain)
 	default:
 		match, found, err := resolveSingleSymbolQuery(stdout, state.Info.ModulePath, state.Store, command.Query)
 		if err != nil {
@@ -79,7 +79,7 @@ func runCoChange(command cli.Command, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return renderHumanCoChange(stdout, state.Info.ModulePath, view)
+		return renderHumanCoChange(stdout, state.Info.ModulePath, view, command.Explain)
 	}
 }
 
@@ -111,23 +111,42 @@ func resolveSinglePackageQuery(stdout io.Writer, modulePath string, store *stora
 	return storage.PackageMatch{}, false, nil
 }
 
-func renderHumanSymbolHistory(stdout io.Writer, root, modulePath string, view storage.SymbolHistoryView) error {
+func renderHumanSymbolHistory(stdout io.Writer, root, modulePath string, view storage.SymbolHistoryView, explain bool) error {
+	p := newPalette()
+	if _, err := fmt.Fprintf(stdout, "%s\n%s\n\n", p.rule("History"), p.title("CTX History")); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(
 		stdout,
-		"Symbol History\n  Symbol: %s\n  Signature: %s\n  Declared now: %s\n  Introduced in: snapshot %d (%s)\n  Changed since: snapshot %d (%s)\n\n",
+		"%s\n  %s symbol\n  %s %s\n  %s %s\n  %s %s\n  %s snapshot %d (%s)\n  %s snapshot %d (%s)\n\n",
+		p.section("Summary"),
+		p.label("Scope:"),
+		p.label("Symbol:"),
 		shortenQName(modulePath, view.Symbol.QName),
+		p.label("Signature:"),
 		displaySignature(view.Symbol),
+		p.label("Declared now:"),
 		symbolRangeDisplay(root, view.Symbol),
+		p.label("Introduced in:"),
 		view.IntroducedIn.ID,
 		view.IntroducedIn.CreatedAt.Format(timeFormat),
+		p.label("Changed since:"),
 		view.LastChangedIn.ID,
 		view.LastChangedIn.CreatedAt.Format(timeFormat),
 	); err != nil {
 		return err
 	}
+	if explain {
+		if err := renderHumanExplainSection(stdout, p, buildSymbolHistoryExplain(view)); err != nil {
+			return err
+		}
+	}
 
-	if _, err := fmt.Fprintf(stdout, "Recent Change Events (%d):\n", len(view.Events)); err != nil {
+	if _, err := fmt.Fprintf(stdout, "%s (%d)\n", p.section("Recent Change Events"), len(view.Events)); err != nil {
 		return err
+	}
+	if len(view.Events) == 0 {
+		return renderHumanEmpty(stdout, p)
 	}
 	for _, event := range view.Events {
 		parts := []string{event.Status}
@@ -156,28 +175,48 @@ func renderHumanSymbolHistory(stdout io.Writer, root, modulePath string, view st
 			return err
 		}
 	}
-	return nil
+	_, err := fmt.Fprintln(stdout)
+	return err
 }
 
-func renderHumanPackageHistory(stdout io.Writer, modulePath string, view storage.PackageHistoryView) error {
+func renderHumanPackageHistory(stdout io.Writer, modulePath string, view storage.PackageHistoryView, explain bool) error {
+	p := newPalette()
+	if _, err := fmt.Fprintf(stdout, "%s\n%s\n\n", p.rule("History"), p.title("CTX History")); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(
 		stdout,
-		"Package History\n  Package: %s\n  Dir: %s\n  Inventory now: files=%d symbols=%d tests=%d\n  Introduced in: snapshot %d (%s)\n  Changed since: snapshot %d (%s)\n\n",
+		"%s\n  %s package\n  %s %s\n  %s %s\n  %s files=%d symbols=%d tests=%d\n  %s snapshot %d (%s)\n  %s snapshot %d (%s)\n\n",
+		p.section("Summary"),
+		p.label("Scope:"),
+		p.label("Package:"),
 		shortenQName(modulePath, view.Package.ImportPath),
+		p.label("Dir:"),
 		view.Package.DirPath,
+		p.label("Inventory now:"),
 		view.Package.FileCount,
 		view.Package.SymbolCount,
 		view.Package.TestCount,
+		p.label("Introduced in:"),
 		view.IntroducedIn.ID,
 		view.IntroducedIn.CreatedAt.Format(timeFormat),
+		p.label("Changed since:"),
 		view.LastChangedIn.ID,
 		view.LastChangedIn.CreatedAt.Format(timeFormat),
 	); err != nil {
 		return err
 	}
+	if explain {
+		if err := renderHumanExplainSection(stdout, p, buildPackageHistoryExplain(view)); err != nil {
+			return err
+		}
+	}
 
-	if _, err := fmt.Fprintf(stdout, "Recent Change Events (%d):\n", len(view.Events)); err != nil {
+	if _, err := fmt.Fprintf(stdout, "%s (%d)\n", p.section("Recent Change Events"), len(view.Events)); err != nil {
 		return err
+	}
+	if len(view.Events) == 0 {
+		return renderHumanEmpty(stdout, p)
 	}
 	for _, event := range view.Events {
 		parts := []string{event.Status}
@@ -209,47 +248,153 @@ func renderHumanPackageHistory(stdout io.Writer, modulePath string, view storage
 			return err
 		}
 	}
-	return nil
+	_, err := fmt.Fprintln(stdout)
+	return err
 }
 
-func renderHumanCoChange(stdout io.Writer, modulePath string, view storage.CoChangeView) error {
+func renderHumanCoChange(stdout io.Writer, modulePath string, view storage.CoChangeView, explain bool) error {
+	p := newPalette()
+	if _, err := fmt.Fprintf(stdout, "%s\n%s\n\n", p.rule("Co-Change"), p.title("CTX Co-Change")); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(
 		stdout,
-		"Co-Change Analysis\n  Scope: %s\n  Anchor: %s\n",
+		"%s\n  %s %s\n  %s %s\n",
+		p.section("Summary"),
+		p.label("Scope:"),
 		view.Scope,
+		p.label("Anchor:"),
 		shortenQName(modulePath, view.Anchor),
 	); err != nil {
 		return err
 	}
 	if view.AnchorFile != "" {
-		if _, err := fmt.Fprintf(stdout, "  Anchor file: %s\n", view.AnchorFile); err != nil {
+		if _, err := fmt.Fprintf(stdout, "  %s %s\n", p.label("Anchor file:"), view.AnchorFile); err != nil {
 			return err
 		}
 	}
 	if view.AnchorPackage != "" {
-		if _, err := fmt.Fprintf(stdout, "  Anchor package: %s\n", shortenQName(modulePath, view.AnchorPackage)); err != nil {
+		if _, err := fmt.Fprintf(stdout, "  %s %s\n", p.label("Anchor package:"), shortenQName(modulePath, view.AnchorPackage)); err != nil {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintf(stdout, "  Anchor changes observed: %d snapshot diff(s)\n\n", view.AnchorChangeCount); err != nil {
+	if _, err := fmt.Fprintf(stdout, "  %s %d snapshot diff(s)\n\n", p.label("Anchor changes observed:"), view.AnchorChangeCount); err != nil {
 		return err
+	}
+	if explain {
+		if err := renderHumanExplainSection(stdout, p, buildCoChangeExplain(view)); err != nil {
+			return err
+		}
 	}
 
-	if _, err := fmt.Fprintf(stdout, "Files That Change Together (%d):\n", len(view.Files)); err != nil {
+	if _, err := fmt.Fprintf(stdout, "%s (%d)\n", p.section("Files That Change Together"), len(view.Files)); err != nil {
 		return err
 	}
-	for _, item := range view.Files {
-		if _, err := fmt.Fprintf(stdout, "  %s  count=%d  rate=%.0f%%\n", item.Label, item.Count, item.Frequency*100); err != nil {
+	if len(view.Files) == 0 {
+		if err := renderHumanEmpty(stdout, p); err != nil {
 			return err
 		}
+	} else {
+		for _, item := range view.Files {
+			if _, err := fmt.Fprintf(stdout, "  %s  count=%d  rate=%.0f%%\n", item.Label, item.Count, item.Frequency*100); err != nil {
+				return err
+			}
+		}
 	}
-	if _, err := fmt.Fprintf(stdout, "\nPackages That Change Together (%d):\n", len(view.Packages)); err != nil {
+	if _, err := fmt.Fprintf(stdout, "\n%s (%d)\n", p.section("Packages That Change Together"), len(view.Packages)); err != nil {
 		return err
+	}
+	if len(view.Packages) == 0 {
+		return renderHumanEmpty(stdout, p)
 	}
 	for _, item := range view.Packages {
 		if _, err := fmt.Fprintf(stdout, "  %s  count=%d  rate=%.0f%%\n", shortenQName(modulePath, item.Label), item.Count, item.Frequency*100); err != nil {
 			return err
 		}
 	}
-	return nil
+	_, err := fmt.Fprintln(stdout)
+	return err
+}
+
+func buildSymbolHistoryExplain(view storage.SymbolHistoryView) explainSection {
+	section := explainSection{
+		Title: "Explain",
+		Facts: []explainFact{
+			{Key: "Event source", Value: "stored snapshot diffs for the same qualified symbol"},
+			{Key: "Recent events", Value: fmt.Sprintf("%d", len(view.Events))},
+			{Key: "Precision", Value: "status/contract/move/call/ref/test deltas come from indexed snapshots only"},
+		},
+		Notes: []string{
+			"contract means the indexed signature changed",
+			"moved means file path or declaration line changed for the same symbol",
+		},
+	}
+	if len(view.Events) > 0 {
+		items := make([]explainItem, 0, min(5, len(view.Events)))
+		for _, event := range view.Events[:min(5, len(view.Events))] {
+			details := []string{event.Status}
+			if event.ContractChanged {
+				details = append(details, "contract changed")
+			}
+			if event.Moved {
+				details = append(details, "declaration moved")
+			}
+			items = append(items, explainItem{
+				Label:   fmt.Sprintf("snapshot %d (%s)", event.ToSnapshot.ID, event.ToSnapshot.CreatedAt.Format(timeFormat)),
+				Details: details,
+			})
+		}
+		section.Groups = append(section.Groups, explainGroup{Title: "Recent event hints", Items: items})
+	}
+	return section
+}
+
+func buildPackageHistoryExplain(view storage.PackageHistoryView) explainSection {
+	section := explainSection{
+		Title: "Explain",
+		Facts: []explainFact{
+			{Key: "Event source", Value: "stored snapshot diffs for the same package import path"},
+			{Key: "Recent events", Value: fmt.Sprintf("%d", len(view.Events))},
+			{Key: "Precision", Value: "file/symbol/test/dependency deltas come from indexed package snapshots only"},
+		},
+		Notes: []string{
+			"contracts counts symbols whose indexed signature changed inside the package",
+			"moved counts symbols whose declaration location changed between snapshots",
+		},
+	}
+	if len(view.Events) > 0 {
+		items := make([]explainItem, 0, min(5, len(view.Events)))
+		for _, event := range view.Events[:min(5, len(view.Events))] {
+			details := []string{event.Status}
+			if event.FileDelta != 0 {
+				details = append(details, fmt.Sprintf("files %+d", event.FileDelta))
+			}
+			if event.SymbolDelta != 0 {
+				details = append(details, fmt.Sprintf("symbols %+d", event.SymbolDelta))
+			}
+			if event.TestDelta != 0 {
+				details = append(details, fmt.Sprintf("tests %+d", event.TestDelta))
+			}
+			items = append(items, explainItem{
+				Label:   fmt.Sprintf("snapshot %d (%s)", event.ToSnapshot.ID, event.ToSnapshot.CreatedAt.Format(timeFormat)),
+				Details: details,
+			})
+		}
+		section.Groups = append(section.Groups, explainGroup{Title: "Recent event hints", Items: items})
+	}
+	return section
+}
+
+func buildCoChangeExplain(view storage.CoChangeView) explainSection {
+	return explainSection{
+		Title: "Explain",
+		Facts: []explainFact{
+			{Key: "Anchor changes", Value: fmt.Sprintf("%d snapshot diff(s)", view.AnchorChangeCount)},
+			{Key: "Precision", Value: "co-change is empirical history from stored diffs, not a direct dependency edge"},
+		},
+		Notes: []string{
+			"higher rate means the file/package changed in a larger share of anchor diffs",
+			"co-change can reveal operational coupling even when the static graph is sparse",
+		},
+	}
 }

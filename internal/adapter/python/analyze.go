@@ -11,6 +11,7 @@ func (a *Adapter) Analyze(info project.Info, scanned map[string]codebase.ScanFil
 	input := analyzerInput{
 		Root:        info.Root,
 		ProjectName: info.ModulePath,
+		SourceRoots: pythonSourceRootsFromScannedMap(scanned),
 		Patterns:    dedupeStrings(patterns),
 		Files:       make([]analyzerInputFile, 0, len(scanned)),
 	}
@@ -61,4 +62,12 @@ func (a *Adapter) Analyze(info project.Info, scanned map[string]codebase.ScanFil
 
 	codebase.SortResult(result)
 	return result, nil
+}
+
+func pythonSourceRootsFromScannedMap(scanned map[string]codebase.ScanFile) []string {
+	files := make([]codebase.ScanFile, 0, len(scanned))
+	for _, file := range scanned {
+		files = append(files, file)
+	}
+	return pythonSourceRootsFromScanFiles(files)
 }

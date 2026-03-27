@@ -31,9 +31,9 @@ func runSymbol(command cli.Command, stdout io.Writer) error {
 	}
 	switch command.OutputMode {
 	case cli.OutputAI:
-		return renderAISymbolView(stdout, state.Info.ModulePath, view, guidance)
+		return renderAISymbolView(stdout, state.Info.ModulePath, view, guidance, command.Explain)
 	default:
-		return renderHumanSymbolView(stdout, state.Info.Root, state.Info.ModulePath, view, guidance)
+		return renderHumanSymbolView(stdout, state.Info.Root, state.Info.ModulePath, view, guidance, command.Explain)
 	}
 }
 
@@ -66,8 +66,8 @@ func runImpact(command cli.Command, stdout io.Writer) error {
 	}
 	switch command.OutputMode {
 	case cli.OutputAI:
-		return renderAIImpactView(stdout, state.Info.ModulePath, view, guidance, command.Depth)
+		return renderAIImpactView(stdout, state.Info.ModulePath, view, guidance, command.Depth, command.Explain)
 	default:
-		return renderHumanImpactView(stdout, state.Info.Root, state.Info.ModulePath, view, guidance, command.Depth)
+		return renderHumanImpactView(stdout, state.Info.Root, state.Info.ModulePath, view, guidance, command.Depth, command.Explain)
 	}
 }

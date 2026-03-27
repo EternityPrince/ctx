@@ -1,6 +1,7 @@
 import ast
 
-from modules import normalize_module_name
+from modules import normalize_module_name, resolve_import_from_module
+from symbols import reference_kind
 
 
 def collect_local_names(node):
@@ -45,10 +46,31 @@ def collect_local_names(node):
 def binding_symbol(binding):
     if not binding:
         return None
-    kind, value = binding
+    kind, value, _ = binding_parts(binding)
     if kind in ("symbol", "instance"):
         return value
     return None
+
+
+def binding_parts(binding):
+    if not binding:
+        return None, None, ""
+    kind = binding[0] if len(binding) > 0 else None
+    value = binding[1] if len(binding) > 1 else None
+    meta = binding[2] if len(binding) > 2 else ""
+    return kind, value, meta
+
+
+def normalize_annotation_expr(annotation):
+    if annotation is None:
+        return None
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            parsed = ast.parse(annotation.value, mode="eval")
+        except SyntaxError:
+            return None
+        return parsed.body
+    return annotation
 
 
 class ScopeState:
@@ -61,7 +83,11 @@ class ScopeState:
         owner,
         class_symbol,
         module_aliases,
+        module_alias_meta,
         symbol_aliases,
+        symbol_alias_meta,
+        module_loader_aliases,
+        import_call_aliases,
         local_names,
     ):
         self.analyzer = analyzer
@@ -71,9 +97,15 @@ class ScopeState:
         self.owner = owner
         self.class_symbol = class_symbol
         self.module_aliases = dict(module_aliases)
+        self.module_alias_meta = dict(module_alias_meta)
         self.symbol_aliases = dict(symbol_aliases)
+        self.symbol_alias_meta = dict(symbol_alias_meta)
+        self.module_loader_aliases = set(module_loader_aliases)
+        self.import_call_aliases = set(import_call_aliases)
         self.local_names = set(local_names)
         self.local_bindings = {}
+        self.in_annotation = False
+        self.in_type_checking = False
 
         class_key = class_symbol["SymbolKey"] if class_symbol else ""
         self.attribute_bindings = dict(analyzer.class_attribute_bindings.get(class_key, {}))
@@ -123,13 +155,14 @@ class ScopeState:
                 self.bind_target(element, None)
 
     def binding_from_annotation(self, annotation):
+        annotation = normalize_annotation_expr(annotation)
         if annotation is None:
             return None
-        kind, value = self.resolve_expr(annotation, ignore_locals=True)
+        kind, value, meta = self.resolve_expr_meta(annotation, ignore_locals=True)
         if kind == "symbol" and value and value["Kind"] == "class":
-            return ("instance", value)
+            return ("instance", value, meta)
         if kind == "instance" and value:
-            return ("instance", value)
+            return ("instance", value, meta)
         return None
 
     def binding_from_value(self, value, annotation=None):
@@ -139,61 +172,122 @@ class ScopeState:
                 return binding
         if value is None:
             return None
-        kind, target = self.resolve_expr(value)
+        kind, target, meta = self.resolve_expr_meta(value)
         if kind in ("module", "symbol", "instance"):
-            return (kind, target)
+            return (kind, target, meta)
         return None
 
     def resolve_expr(self, expr, ignore_locals=False):
+        kind, value, _ = self.resolve_expr_meta(expr, ignore_locals=ignore_locals)
+        return kind, value
+
+    def resolve_expr_meta(self, expr, ignore_locals=False):
         if isinstance(expr, ast.Name):
             if not ignore_locals and expr.id in self.local_bindings:
-                return self.local_bindings[expr.id]
+                return binding_parts(self.local_bindings[expr.id])
             if expr.id in self.symbol_aliases:
-                return ("symbol", self.analyzer.symbols_by_key.get(self.symbol_aliases[expr.id]))
+                return (
+                    "symbol",
+                    self.analyzer.symbols_by_key.get(self.symbol_aliases[expr.id]),
+                    self.symbol_alias_meta.get(expr.id, ""),
+                )
             if expr.id in self.module_aliases:
-                return ("module", self.module_aliases[expr.id])
+                return ("module", self.module_aliases[expr.id], self.module_alias_meta.get(expr.id, ""))
             if not ignore_locals and expr.id in self.local_names:
-                return (None, None)
+                return (None, None, "")
             symbol = self.analyzer.top_symbols_by_module.get(self.module_name, {}).get(expr.id)
             if symbol:
-                return ("symbol", symbol)
-            return (None, None)
+                return ("symbol", symbol, "")
+            return (None, None, "")
 
         if isinstance(expr, ast.Attribute):
             if isinstance(expr.value, ast.Name) and expr.value.id in ("self", "cls") and self.class_symbol:
                 if expr.attr in self.attribute_bindings:
-                    return self.attribute_bindings[expr.attr]
+                    return binding_parts(self.attribute_bindings[expr.attr])
                 method = self.analyzer.methods_by_class_key.get(self.class_symbol["SymbolKey"], {}).get(expr.attr)
                 if method:
-                    return ("symbol", method)
+                    return ("symbol", method, "")
 
-            base_kind, base = self.resolve_expr(expr.value, ignore_locals=ignore_locals)
+            base_kind, base, base_meta = self.resolve_expr_meta(expr.value, ignore_locals=ignore_locals)
             if base_kind == "module" and base:
-                submodule = normalize_module_name(f"{base}.{expr.attr}", self.analyzer.module_to_package)
+                submodule = normalize_module_name(
+                    f"{base}.{expr.attr}",
+                    self.analyzer.module_to_package,
+                    self.analyzer.module_prefixes,
+                )
                 if submodule:
-                    return ("module", submodule)
+                    return ("module", submodule, base_meta)
                 symbol = self.analyzer.top_symbols_by_module.get(base, {}).get(expr.attr)
                 if symbol:
-                    return ("symbol", symbol)
-                return (None, None)
+                    return ("symbol", symbol, base_meta)
+                return (None, None, "")
 
             if base_kind in ("instance", "symbol") and base:
                 class_symbol = base if base_kind == "instance" or base["Kind"] == "class" else None
                 if class_symbol:
                     if expr.attr in self.analyzer.class_attribute_bindings.get(class_symbol["SymbolKey"], {}):
-                        return self.analyzer.class_attribute_bindings[class_symbol["SymbolKey"]][expr.attr]
+                        return binding_parts(self.analyzer.class_attribute_bindings[class_symbol["SymbolKey"]][expr.attr])
                     method = self.analyzer.methods_by_class_key.get(class_symbol["SymbolKey"], {}).get(expr.attr)
                     if method:
-                        return ("symbol", method)
-            return (None, None)
+                        return ("symbol", method, base_meta)
+            return (None, None, "")
 
         if isinstance(expr, ast.Call):
-            kind, target = self.resolve_expr(expr.func, ignore_locals=ignore_locals)
+            module_name, meta = self.resolve_dynamic_module(expr)
+            if module_name:
+                return ("module", module_name, meta)
+            kind, target, meta = self.resolve_expr_meta(expr.func, ignore_locals=ignore_locals)
             if kind == "symbol" and target and target["Kind"] == "class":
-                return ("instance", target)
-            return (None, None)
+                return ("instance", target, meta)
+            return (None, None, "")
 
-        return (None, None)
+        return (None, None, "")
+
+    def resolve_dynamic_module(self, expr):
+        if not isinstance(expr, ast.Call):
+            return "", ""
+        if not expr.args:
+            return "", ""
+
+        func = expr.func
+        if isinstance(func, ast.Name):
+            if func.id not in self.import_call_aliases:
+                return "", ""
+        elif isinstance(func, ast.Attribute):
+            if func.attr != "import_module":
+                return "", ""
+            if not isinstance(func.value, ast.Name) or func.value.id not in self.module_loader_aliases:
+                return "", ""
+        else:
+            return "", ""
+
+        module_name = extract_string_value(expr.args[0])
+        if not module_name:
+            return "", ""
+
+        if module_name.startswith("."):
+            package_name = ""
+            if len(expr.args) > 1:
+                package_name = extract_string_value(expr.args[1])
+            if not package_name:
+                for keyword in expr.keywords:
+                    if keyword.arg == "package":
+                        package_name = extract_string_value(keyword.value)
+                        break
+            if not package_name:
+                return "", ""
+
+            level = len(module_name) - len(module_name.lstrip("."))
+            module_name = resolve_import_from_module(package_name, module_name[level:], level)
+
+        return (
+            normalize_module_name(
+                module_name,
+                self.analyzer.module_to_package,
+                self.analyzer.module_prefixes,
+            ),
+            "dynamic_import",
+        )
 
 
 class RelationshipVisitor(ast.NodeVisitor):
@@ -209,39 +303,99 @@ class RelationshipVisitor(ast.NodeVisitor):
     def visit_ClassDef(self, node):
         return
 
+    def visit_If(self, node):
+        if is_type_checking_guard(node.test):
+            previous = self.state.in_type_checking
+            self.state.in_type_checking = True
+            for statement in node.body:
+                self.visit(statement)
+            self.state.in_type_checking = previous
+            for statement in node.orelse:
+                self.visit(statement)
+            return
+        self.generic_visit(node)
+
+    def visit_annotation(self, node):
+        previous = self.state.in_annotation
+        self.state.in_annotation = True
+        try:
+            self.visit(node)
+        finally:
+            self.state.in_annotation = previous
+
     def visit_Import(self, node):
         for alias in node.names:
+            if alias.name == "importlib":
+                self.state.module_loader_aliases.add(alias.asname or "importlib")
+                self.state.bind_name(alias.asname or alias.name.split(".")[0], None)
+                continue
             bound_name = alias.asname or alias.name.split(".")[0]
-            target_module = normalize_module_name(alias.name, self.state.analyzer.module_to_package)
+            target_module = normalize_module_name(
+                alias.name,
+                self.state.analyzer.module_to_package,
+                self.state.analyzer.module_prefixes,
+            )
             if not target_module:
                 continue
             module_ref = target_module if alias.asname else bound_name
-            self.state.bind_name(bound_name, ("module", module_ref))
+            meta = "type_checking_import" if self.state.in_type_checking else "import"
+            self.state.module_aliases[bound_name] = module_ref
+            self.state.module_alias_meta[bound_name] = meta
+            self.state.bind_name(bound_name, ("module", module_ref, meta))
+            self.state.analyzer.add_module_dependency(self.state.package_path, target_module)
 
     def visit_ImportFrom(self, node):
-        from modules import resolve_import_from_module
+        if node.level == 0 and (node.module or "") == "importlib":
+            for alias in node.names:
+                if alias.name == "import_module":
+                    self.state.import_call_aliases.add(alias.asname or alias.name)
+                    self.state.bind_name(alias.asname or alias.name, None)
+            return
 
         base_module = resolve_import_from_module(
             self.state.package_path, node.module or "", node.level
         )
-        base_module = normalize_module_name(base_module, self.state.analyzer.module_to_package)
+        base_module = normalize_module_name(
+            base_module,
+            self.state.analyzer.module_to_package,
+            self.state.analyzer.module_prefixes,
+        )
         if not base_module:
             return
 
+        self.state.analyzer.add_module_dependency(self.state.package_path, base_module)
         for alias in node.names:
             if alias.name == "*":
+                for export_name in self.state.analyzer._module_export_names(base_module):
+                    symbol, export_meta = self.state.analyzer._resolve_module_export_detail(base_module, export_name)
+                    if symbol:
+                        meta = contextual_import_meta(export_meta, self.state.in_type_checking)
+                        self.state.symbol_aliases[export_name] = symbol["SymbolKey"]
+                        self.state.symbol_alias_meta[export_name] = meta
+                        self.state.bind_name(export_name, ("symbol", symbol, meta))
                 continue
 
             target_module = normalize_module_name(
-                f"{base_module}.{alias.name}", self.state.analyzer.module_to_package
+                f"{base_module}.{alias.name}",
+                self.state.analyzer.module_to_package,
+                self.state.analyzer.module_prefixes,
             )
             if target_module:
-                self.state.bind_name(alias.asname or alias.name, ("module", target_module))
+                bound_name = alias.asname or alias.name
+                meta = "type_checking_import" if self.state.in_type_checking else "import"
+                self.state.module_aliases[bound_name] = target_module
+                self.state.module_alias_meta[bound_name] = meta
+                self.state.bind_name(bound_name, ("module", target_module, meta))
+                self.state.analyzer.add_module_dependency(self.state.package_path, target_module)
                 continue
 
-            symbol = self.state.analyzer.top_symbols_by_module.get(base_module, {}).get(alias.name)
+            symbol, export_meta = self.state.analyzer._resolve_module_export_detail(base_module, alias.name)
             if symbol:
-                self.state.bind_name(alias.asname or alias.name, ("symbol", symbol))
+                bound_name = alias.asname or alias.name
+                meta = contextual_import_meta(export_meta, self.state.in_type_checking)
+                self.state.symbol_aliases[bound_name] = symbol["SymbolKey"]
+                self.state.symbol_alias_meta[bound_name] = meta
+                self.state.bind_name(bound_name, ("symbol", symbol, meta))
 
     def visit_Assign(self, node):
         self.visit(node.value)
@@ -250,8 +404,9 @@ class RelationshipVisitor(ast.NodeVisitor):
             self.state.bind_target(target, binding)
 
     def visit_AnnAssign(self, node):
-        if node.annotation is not None:
-            self.visit(node.annotation)
+        annotation = normalize_annotation_expr(node.annotation)
+        if annotation is not None:
+            self.visit_annotation(annotation)
         if node.value is not None:
             self.visit(node.value)
         binding = self.state.binding_from_value(node.value, node.annotation)
@@ -272,7 +427,9 @@ class RelationshipVisitor(ast.NodeVisitor):
     def visit_Name(self, node):
         if not isinstance(node.ctx, ast.Load):
             return
-        symbol = binding_symbol(self.state.resolve_expr(node))
+        kind, symbol, meta = self.state.resolve_expr_meta(node)
+        if kind not in ("symbol", "instance"):
+            return
         if symbol:
             self.state.analyzer.add_reference(
                 self.state.package_path,
@@ -281,10 +438,14 @@ class RelationshipVisitor(ast.NodeVisitor):
                 self.state.rel_path,
                 node.lineno,
                 node.col_offset + 1,
+                reference_kind(symbol["Kind"], meta, self.state.in_annotation),
             )
 
     def visit_Attribute(self, node):
-        symbol = binding_symbol(self.state.resolve_expr(node))
+        kind, symbol, meta = self.state.resolve_expr_meta(node)
+        if kind not in ("symbol", "instance"):
+            self.generic_visit(node)
+            return
         if symbol:
             self.state.analyzer.add_reference(
                 self.state.package_path,
@@ -293,11 +454,15 @@ class RelationshipVisitor(ast.NodeVisitor):
                 self.state.rel_path,
                 node.lineno,
                 node.col_offset + 1,
+                reference_kind(symbol["Kind"], meta, self.state.in_annotation),
             )
         self.generic_visit(node)
 
     def visit_Call(self, node):
-        symbol = binding_symbol(self.state.resolve_expr(node.func))
+        kind, symbol, meta = self.state.resolve_expr_meta(node.func)
+        if kind not in ("symbol", "instance"):
+            self.generic_visit(node)
+            return
         if symbol:
             self.state.analyzer.add_call(
                 self.state.package_path,
@@ -306,5 +471,40 @@ class RelationshipVisitor(ast.NodeVisitor):
                 self.state.rel_path,
                 node.lineno,
                 node.col_offset + 1,
+                call_dispatch(symbol, meta),
             )
         self.generic_visit(node)
+
+
+def extract_string_value(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return ""
+
+
+def is_type_checking_guard(test):
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    if isinstance(test, ast.Attribute):
+        return isinstance(test.value, ast.Name) and test.value.id == "typing" and test.attr == "TYPE_CHECKING"
+    return False
+
+
+def contextual_import_meta(export_meta, in_type_checking):
+    if in_type_checking:
+        if export_meta == "re_export":
+            return "type_checking_reexport"
+        return "type_checking_import"
+    if export_meta:
+        return export_meta
+    return "import"
+
+
+def call_dispatch(symbol, meta):
+    if meta == "dynamic_import":
+        return "dynamic_import"
+    if meta in ("re_export", "type_checking_reexport"):
+        return "reexport"
+    if symbol and symbol.get("Kind") == "method":
+        return "dynamic"
+    return "static"

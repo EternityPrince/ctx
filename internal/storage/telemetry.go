@@ -6,12 +6,18 @@ import (
 	"time"
 )
 
-const sqliteSchemaVersion = 4
+const sqliteSchemaVersion = 5
 
 type SnapshotCommitTelemetry struct {
-	ScannedFiles    int
-	ScanDuration    time.Duration
-	AnalyzeDuration time.Duration
+	ScannedFiles     int
+	ScanDuration     time.Duration
+	AnalyzeDuration  time.Duration
+	PlanMode         string
+	DirectPackages   int
+	ExpandedPackages int
+	ReusedPackages   int
+	ReusePercent     int
+	PlanCacheHit     bool
 }
 
 func ExpectedSchemaVersion() int {

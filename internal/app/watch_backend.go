@@ -7,12 +7,21 @@ func newWatchBackend(root string) (watchBackend, error) {
 	if err == nil {
 		return backend, nil
 	}
-	return &pollWatchBackend{}, nil
+	return &pollWatchBackend{mode: "poll(fallback)"}, nil
 }
 
-type pollWatchBackend struct{}
+type pollWatchBackend struct {
+	mode string
+}
 
-func (b *pollWatchBackend) Mode() string { return "poll" }
+func (b *pollWatchBackend) Mode() string {
+	if b.mode != "" {
+		return b.mode
+	}
+	return "poll"
+}
+
+func (b *pollWatchBackend) EventDriven() bool { return false }
 
 func (b *pollWatchBackend) Wait(timeout time.Duration) (watchWake, error) {
 	if timeout > 0 {

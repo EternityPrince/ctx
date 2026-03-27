@@ -71,11 +71,12 @@ func TestCommitSnapshotStoresTelemetryAndSchemaVersion(t *testing.T) {
 		"telemetry test",
 		[]codebase.ScanFile{
 			{
-				RelPath:   "go.mod",
-				Identity:  "example.com/project",
-				Hash:      "mod123",
-				SizeBytes: 32,
-				IsModule:  true,
+				RelPath:      "go.mod",
+				Identity:     "example.com/project",
+				SemanticMeta: codebase.EncodeManifestMeta(codebase.ParseGoModManifestMeta([]byte("module example.com/project\n\ngo 1.26\n"))),
+				Hash:         "mod123",
+				SizeBytes:    32,
+				IsModule:     true,
 			},
 			{
 				RelPath:           "main.go",
@@ -110,9 +111,15 @@ func TestCommitSnapshotStoresTelemetryAndSchemaVersion(t *testing.T) {
 		codebase.ChangeSet{Added: []string{"go.mod", "main.go"}},
 		true,
 		SnapshotCommitTelemetry{
-			ScannedFiles:    7,
-			ScanDuration:    15 * time.Millisecond,
-			AnalyzeDuration: 25 * time.Millisecond,
+			ScannedFiles:     7,
+			ScanDuration:     15 * time.Millisecond,
+			AnalyzeDuration:  25 * time.Millisecond,
+			PlanMode:         "partial",
+			DirectPackages:   1,
+			ExpandedPackages: 3,
+			ReusedPackages:   9,
+			ReusePercent:     75,
+			PlanCacheHit:     true,
 		},
 	)
 	if err != nil {
@@ -130,6 +137,9 @@ func TestCommitSnapshotStoresTelemetryAndSchemaVersion(t *testing.T) {
 	if snapshot.TotalDurationMs() < 40 {
 		t.Fatalf("expected total duration to include scan/analyze timings, got %+v", snapshot)
 	}
+	if snapshot.IncrementalMode != "partial" || snapshot.DirectPackages != 1 || snapshot.ExpandedPackages != 3 || snapshot.ReusedPackages != 9 || snapshot.ReusePercent != 75 || !snapshot.PlanCacheHit {
+		t.Fatalf("expected incremental telemetry to roundtrip, got %+v", snapshot)
+	}
 
 	files, err := store.CurrentFiles()
 	if err != nil {
@@ -137,6 +147,9 @@ func TestCommitSnapshotStoresTelemetryAndSchemaVersion(t *testing.T) {
 	}
 	if files["go.mod"].Identity != "example.com/project" {
 		t.Fatalf("expected module file identity to roundtrip, got %+v", files["go.mod"])
+	}
+	if files["go.mod"].SemanticMeta == "" {
+		t.Fatalf("expected module file semantic metadata to roundtrip, got %+v", files["go.mod"])
 	}
 	if files["main.go"].Identity != "" {
 		t.Fatalf("did not expect plain source file identity to be populated, got %+v", files["main.go"])

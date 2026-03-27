@@ -16,16 +16,19 @@ func TestScanRecognizesPythonProjectFilesAndTests(t *testing.T) {
 	}
 
 	byPath := make(map[string]struct {
-		isTest   bool
-		isModule bool
+		isTest    bool
+		isModule  bool
+		packageID string
 	})
 	for _, file := range files {
 		byPath[file.RelPath] = struct {
-			isTest   bool
-			isModule bool
+			isTest    bool
+			isModule  bool
+			packageID string
 		}{
-			isTest:   file.IsTest,
-			isModule: file.IsModule,
+			isTest:    file.IsTest,
+			isModule:  file.IsModule,
+			packageID: file.PackageImportPath,
 		}
 	}
 
@@ -40,6 +43,25 @@ func TestScanRecognizesPythonProjectFilesAndTests(t *testing.T) {
 	}
 	if value, ok := byPath["app/main.py"]; !ok || value.isTest {
 		t.Fatalf("expected app/main.py to be scanned as non-test source, got %+v", value)
+	}
+}
+
+func TestScanDerivesPythonPackagesFromConfiguredSourceRoot(t *testing.T) {
+	root := t.TempDir()
+	writePythonFixture(t, root, "pyproject.toml", "[project]\nname = \"scan-demo\"\n\n[tool.setuptools.packages.find]\nwhere = [\"lib\"]\n")
+	writePythonFixture(t, root, "lib/pkg/__init__.py", "")
+	writePythonFixture(t, root, "lib/pkg/service.py", "def run():\n    return 1\n")
+
+	adapter := NewAdapter()
+	files, err := adapter.Scan(root)
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+
+	for _, file := range files {
+		if file.RelPath == "lib/pkg/service.py" && file.PackageImportPath != "pkg" {
+			t.Fatalf("expected configured source root to strip lib/, got %+v", file)
+		}
 	}
 }
 

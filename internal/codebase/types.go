@@ -12,6 +12,7 @@ type ScanFile struct {
 	RelPath           string
 	PackageImportPath string
 	Identity          string
+	SemanticMeta      string
 	Hash              string
 	SizeBytes         int64
 	IsGo              bool
@@ -24,6 +25,7 @@ type PreviousFile struct {
 	RelPath           string
 	PackageImportPath string
 	Identity          string
+	SemanticMeta      string
 	Hash              string
 	IsTest            bool
 }
@@ -37,10 +39,32 @@ type ChangeSet struct {
 type ChangePlan struct {
 	Changes          ChangeSet
 	ImpactedPackages []string
+	ManifestChanges  []ManifestDelta
+	ExpandedPackages []string
+	Metrics          IncrementalMetrics
 	FullReindex      bool
 	Reason           string
 	Fingerprint      string
 	CacheHit         bool
+}
+
+type ManifestDelta struct {
+	RelPath   string
+	Kind      string
+	Impact    string
+	Packages  []string
+	Details   []string
+	PrevValue string
+	CurValue  string
+}
+
+type IncrementalMetrics struct {
+	Mode                 string
+	ChangedFiles         int
+	DirectPackageCount   int
+	ExpandedPackageCount int
+	ReusedPackageCount   int
+	ReusePercent         int
 }
 
 func (c ChangeSet) Count() int {
@@ -103,7 +127,11 @@ func ScanPackageImportPath(modulePath string, file ScanFile) string {
 }
 
 func PythonPackageImportPath(modulePath, relPath string) string {
-	parts := pythonImportParts(relPath)
+	return PythonPackageImportPathWithRoots(modulePath, relPath, []string{"src"})
+}
+
+func PythonPackageImportPathWithRoots(modulePath, relPath string, roots []string) string {
+	parts := pythonImportPartsWithRoots(relPath, roots)
 	if len(parts) == 0 {
 		return modulePath
 	}
@@ -114,7 +142,11 @@ func PythonPackageImportPath(modulePath, relPath string) string {
 }
 
 func PythonModuleImportPath(modulePath, relPath string) string {
-	parts := pythonImportParts(relPath)
+	return PythonModuleImportPathWithRoots(modulePath, relPath, []string{"src"})
+}
+
+func PythonModuleImportPathWithRoots(modulePath, relPath string, roots []string) string {
+	parts := pythonImportPartsWithRoots(relPath, roots)
 	if len(parts) == 0 {
 		return modulePath
 	}
@@ -122,9 +154,13 @@ func PythonModuleImportPath(modulePath, relPath string) string {
 }
 
 func pythonImportParts(relPath string) []string {
+	return pythonImportPartsWithRoots(relPath, []string{"src"})
+}
+
+func pythonImportPartsWithRoots(relPath string, roots []string) []string {
 	clean := path.Clean(filepath.ToSlash(relPath))
 	clean = strings.TrimPrefix(clean, "./")
-	clean = strings.TrimPrefix(clean, "src/")
+	clean = trimPythonSourceRoot(clean, roots)
 	clean = strings.TrimSuffix(clean, ".py")
 	if clean == "" || clean == "." {
 		return nil
@@ -144,6 +180,35 @@ func pythonImportParts(relPath string) []string {
 		result = append(result, part)
 	}
 	return result
+}
+
+func trimPythonSourceRoot(relPath string, roots []string) string {
+	relPath = filepath.ToSlash(strings.TrimSpace(relPath))
+	best := ""
+	for _, root := range stableStrings(roots) {
+		root = filepath.ToSlash(strings.TrimSpace(root))
+		root = strings.TrimPrefix(root, "./")
+		root = strings.TrimSuffix(root, "/")
+		if root == "" || root == "." {
+			continue
+		}
+		if relPath == root {
+			if len(root) > len(best) {
+				best = root
+			}
+			continue
+		}
+		if strings.HasPrefix(relPath, root+"/") && len(root) > len(best) {
+			best = root
+		}
+	}
+	if best == "" {
+		return relPath
+	}
+	if relPath == best {
+		return ""
+	}
+	return strings.TrimPrefix(relPath, best+"/")
 }
 
 type Result struct {

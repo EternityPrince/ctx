@@ -64,20 +64,24 @@ func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 		}
 
 		identity := ""
+		semanticMeta := ""
 		if name == "go.mod" {
-			identity = parseModulePathFromGoMod(data)
+			meta := codebase.ParseGoModManifestMeta(data)
+			identity = strings.TrimSpace(meta.Module)
+			semanticMeta = codebase.EncodeManifestMeta(meta)
 		}
 
 		sum := sha256.Sum256(data)
 		files = append(files, codebase.ScanFile{
-			AbsPath:   path,
-			RelPath:   relPath,
-			Identity:  identity,
-			Hash:      hex.EncodeToString(sum[:]),
-			SizeBytes: int64(len(data)),
-			IsGo:      isGo,
-			IsTest:    isGo && strings.HasSuffix(name, "_test.go"),
-			IsModule:  isModule,
+			AbsPath:      path,
+			RelPath:      relPath,
+			Identity:     identity,
+			SemanticMeta: semanticMeta,
+			Hash:         hex.EncodeToString(sum[:]),
+			SizeBytes:    int64(len(data)),
+			IsGo:         isGo,
+			IsTest:       isGo && strings.HasSuffix(name, "_test.go"),
+			IsModule:     isModule,
 		})
 		return nil
 	})

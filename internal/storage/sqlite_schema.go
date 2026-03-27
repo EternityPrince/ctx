@@ -31,6 +31,12 @@ func (s *Store) init() error {
 			scan_ms INTEGER NOT NULL DEFAULT 0,
 			analyze_ms INTEGER NOT NULL DEFAULT 0,
 			write_ms INTEGER NOT NULL DEFAULT 0,
+			incremental_mode TEXT NOT NULL DEFAULT '',
+			direct_packages INTEGER NOT NULL DEFAULT 0,
+			expanded_packages INTEGER NOT NULL DEFAULT 0,
+			reused_packages INTEGER NOT NULL DEFAULT 0,
+			reuse_percent INTEGER NOT NULL DEFAULT 0,
+			plan_cache_hit INTEGER NOT NULL DEFAULT 0,
 			total_packages INTEGER NOT NULL DEFAULT 0,
 			total_files INTEGER NOT NULL DEFAULT 0,
 			total_symbols INTEGER NOT NULL DEFAULT 0,
@@ -51,6 +57,7 @@ func (s *Store) init() error {
 			rel_path TEXT NOT NULL,
 			package_import_path TEXT NOT NULL,
 			identity TEXT NOT NULL DEFAULT '',
+			semantic_meta TEXT NOT NULL DEFAULT '',
 			content_hash TEXT NOT NULL,
 			size_bytes INTEGER NOT NULL,
 			is_test INTEGER NOT NULL DEFAULT 0,
@@ -153,10 +160,17 @@ func (s *Store) init() error {
 		name string
 	}{
 		{stmt: `ALTER TABLE files ADD COLUMN identity TEXT NOT NULL DEFAULT ''`, name: "files.identity"},
+		{stmt: `ALTER TABLE files ADD COLUMN semantic_meta TEXT NOT NULL DEFAULT ''`, name: "files.semantic_meta"},
 		{stmt: `ALTER TABLE snapshots ADD COLUMN scanned_files INTEGER NOT NULL DEFAULT 0`, name: "scanned_files"},
 		{stmt: `ALTER TABLE snapshots ADD COLUMN scan_ms INTEGER NOT NULL DEFAULT 0`, name: "scan_ms"},
 		{stmt: `ALTER TABLE snapshots ADD COLUMN analyze_ms INTEGER NOT NULL DEFAULT 0`, name: "analyze_ms"},
 		{stmt: `ALTER TABLE snapshots ADD COLUMN write_ms INTEGER NOT NULL DEFAULT 0`, name: "write_ms"},
+		{stmt: `ALTER TABLE snapshots ADD COLUMN incremental_mode TEXT NOT NULL DEFAULT ''`, name: "incremental_mode"},
+		{stmt: `ALTER TABLE snapshots ADD COLUMN direct_packages INTEGER NOT NULL DEFAULT 0`, name: "direct_packages"},
+		{stmt: `ALTER TABLE snapshots ADD COLUMN expanded_packages INTEGER NOT NULL DEFAULT 0`, name: "expanded_packages"},
+		{stmt: `ALTER TABLE snapshots ADD COLUMN reused_packages INTEGER NOT NULL DEFAULT 0`, name: "reused_packages"},
+		{stmt: `ALTER TABLE snapshots ADD COLUMN reuse_percent INTEGER NOT NULL DEFAULT 0`, name: "reuse_percent"},
+		{stmt: `ALTER TABLE snapshots ADD COLUMN plan_cache_hit INTEGER NOT NULL DEFAULT 0`, name: "plan_cache_hit"},
 	} {
 		if _, err := s.db.Exec(columnStmt.stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 			return fmt.Errorf("add %s column: %w", columnStmt.name, err)

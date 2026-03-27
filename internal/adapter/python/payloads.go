@@ -5,6 +5,7 @@ import "github.com/vladimirkasterin/ctx/internal/codebase"
 type analyzerInput struct {
 	Root        string              `json:"root"`
 	ProjectName string              `json:"project_name"`
+	SourceRoots []string            `json:"source_roots,omitempty"`
 	Patterns    []string            `json:"patterns,omitempty"`
 	Files       []analyzerInputFile `json:"files"`
 }

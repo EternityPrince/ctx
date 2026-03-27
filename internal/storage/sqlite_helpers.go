@@ -238,6 +238,10 @@ func describeCallRelation(dispatch string) string {
 		return "method call edge from indexed call site"
 	case "dynamic":
 		return "dynamic call edge from indexed call site"
+	case "dynamic_import":
+		return "dynamic importlib call edge from indexed call site"
+	case "reexport":
+		return "re-exported call edge from indexed call site"
 	case "":
 		return "call edge from indexed call site"
 	default:
@@ -251,10 +255,24 @@ func describeReferenceKind(kind string) string {
 		return "receiver reference in indexed source"
 	case "type":
 		return "type reference in indexed source"
+	case "annotation":
+		return "annotation reference in indexed source"
+	case "annotation_type":
+		return "annotation type reference in indexed source"
+	case "type_checking":
+		return "TYPE_CHECKING reference in indexed source"
+	case "type_checking_type":
+		return "TYPE_CHECKING type reference in indexed source"
+	case "reexport":
+		return "re-export reference in indexed source"
+	case "reexport_type":
+		return "re-exported type reference in indexed source"
 	case "call":
 		return "call-site reference in indexed source"
 	case "use":
 		return "import or use reference in indexed source"
+	case "value":
+		return "value reference in indexed source"
 	case "":
 		return "reference in indexed source"
 	default:

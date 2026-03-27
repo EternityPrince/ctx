@@ -76,11 +76,15 @@ func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 
 		packageImportPath := ""
 		identity := ""
+		semanticMeta := ""
 		if isRust {
 			packageImportPath = rustPackageImportPathForFile(packages, relPath)
 		}
 		if isModule {
 			identity = rustManifestIdentity(packages, relPath)
+			if name == "Cargo.toml" {
+				semanticMeta = codebase.EncodeManifestMeta(codebase.ParseCargoManifestMeta(data))
+			}
 		}
 		sum := sha256.Sum256(data)
 		files = append(files, codebase.ScanFile{
@@ -88,6 +92,7 @@ func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 			RelPath:           relPath,
 			PackageImportPath: packageImportPath,
 			Identity:          identity,
+			SemanticMeta:      semanticMeta,
 			Hash:              hex.EncodeToString(sum[:]),
 			SizeBytes:         int64(len(data)),
 			IsRust:            isRust,
