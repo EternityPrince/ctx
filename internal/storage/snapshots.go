@@ -11,20 +11,24 @@ import (
 )
 
 type SnapshotInfo struct {
-	ID              int64
-	ParentID        sql.NullInt64
-	Kind            string
-	Note            string
-	CreatedAt       time.Time
-	ChangedFiles    int
-	ChangedPackages int
-	ChangedSymbols  int
-	TotalPackages   int
-	TotalFiles      int
-	TotalSymbols    int
-	TotalCalls      int
-	TotalRefs       int
-	TotalTests      int
+	ID                int64
+	ParentID          sql.NullInt64
+	Kind              string
+	Note              string
+	CreatedAt         time.Time
+	ChangedFiles      int
+	ChangedPackages   int
+	ChangedSymbols    int
+	ScannedFiles      int
+	ScanDurationMs    int
+	AnalyzeDurationMs int
+	WriteDurationMs   int
+	TotalPackages     int
+	TotalFiles        int
+	TotalSymbols      int
+	TotalCalls        int
+	TotalRefs         int
+	TotalTests        int
 }
 
 type StorageStatus struct {
@@ -45,6 +49,35 @@ type ProjectStatus struct {
 	Storage     StorageStatus
 }
 
+func snapshotFromRow(snapshot SnapshotInfo, createdAt string) (SnapshotInfo, error) {
+	parsed, err := time.Parse(time.RFC3339, createdAt)
+	if err != nil {
+		return SnapshotInfo{}, fmt.Errorf("parse snapshot time: %w", err)
+	}
+	snapshot.CreatedAt = parsed
+	return snapshot, nil
+}
+
+func (s SnapshotInfo) TotalDurationMs() int {
+	return s.ScanDurationMs + s.AnalyzeDurationMs + s.WriteDurationMs
+}
+
+func (s SnapshotInfo) TimingBottleneck() string {
+	if s.TotalDurationMs() == 0 {
+		return "none"
+	}
+	stage := "scan"
+	maxValue := s.ScanDurationMs
+	if s.AnalyzeDurationMs > maxValue {
+		stage = "analyze"
+		maxValue = s.AnalyzeDurationMs
+	}
+	if s.WriteDurationMs > maxValue {
+		stage = "write"
+	}
+	return stage
+}
+
 func (s *Store) CurrentSnapshot() (SnapshotInfo, bool, error) {
 	const query = `
 		SELECT
@@ -56,6 +89,10 @@ func (s *Store) CurrentSnapshot() (SnapshotInfo, bool, error) {
 			s.changed_files,
 			s.changed_packages,
 			s.changed_symbols,
+			s.scanned_files,
+			s.scan_ms,
+			s.analyze_ms,
+			s.write_ms,
 			s.total_packages,
 			s.total_files,
 			s.total_symbols,
@@ -78,6 +115,10 @@ func (s *Store) CurrentSnapshot() (SnapshotInfo, bool, error) {
 		&snapshot.ChangedFiles,
 		&snapshot.ChangedPackages,
 		&snapshot.ChangedSymbols,
+		&snapshot.ScannedFiles,
+		&snapshot.ScanDurationMs,
+		&snapshot.AnalyzeDurationMs,
+		&snapshot.WriteDurationMs,
 		&snapshot.TotalPackages,
 		&snapshot.TotalFiles,
 		&snapshot.TotalSymbols,
@@ -91,10 +132,9 @@ func (s *Store) CurrentSnapshot() (SnapshotInfo, bool, error) {
 	if err != nil {
 		return SnapshotInfo{}, false, fmt.Errorf("load current snapshot: %w", err)
 	}
-
-	snapshot.CreatedAt, err = time.Parse(time.RFC3339, createdAt)
+	snapshot, err = snapshotFromRow(snapshot, createdAt)
 	if err != nil {
-		return SnapshotInfo{}, false, fmt.Errorf("parse snapshot time: %w", err)
+		return SnapshotInfo{}, false, err
 	}
 	return snapshot, true, nil
 }
@@ -151,7 +191,7 @@ func (s *Store) CurrentFiles() (map[string]codebase.PreviousFile, error) {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT rel_path, package_import_path, content_hash, is_test
+		SELECT rel_path, package_import_path, identity, content_hash, is_test
 		FROM files
 		WHERE snapshot_id = ?
 	`, snapshot.ID)
@@ -164,7 +204,7 @@ func (s *Store) CurrentFiles() (map[string]codebase.PreviousFile, error) {
 	for rows.Next() {
 		var record codebase.PreviousFile
 		var isTest int
-		if err := rows.Scan(&record.RelPath, &record.PackageImportPath, &record.Hash, &isTest); err != nil {
+		if err := rows.Scan(&record.RelPath, &record.PackageImportPath, &record.Identity, &record.Hash, &isTest); err != nil {
 			return nil, fmt.Errorf("scan current file: %w", err)
 		}
 		record.IsTest = isTest == 1
@@ -181,6 +221,7 @@ func (s *Store) SnapshotByID(id int64) (SnapshotInfo, error) {
 	var createdAt string
 	err := s.db.QueryRow(`
 		SELECT id, parent_id, kind, note, created_at, changed_files, changed_packages, changed_symbols,
+		       scanned_files, scan_ms, analyze_ms, write_ms,
 		       total_packages, total_files, total_symbols, total_calls, total_refs, total_tests
 		FROM snapshots
 		WHERE id = ?
@@ -193,6 +234,10 @@ func (s *Store) SnapshotByID(id int64) (SnapshotInfo, error) {
 		&snapshot.ChangedFiles,
 		&snapshot.ChangedPackages,
 		&snapshot.ChangedSymbols,
+		&snapshot.ScannedFiles,
+		&snapshot.ScanDurationMs,
+		&snapshot.AnalyzeDurationMs,
+		&snapshot.WriteDurationMs,
 		&snapshot.TotalPackages,
 		&snapshot.TotalFiles,
 		&snapshot.TotalSymbols,
@@ -203,9 +248,9 @@ func (s *Store) SnapshotByID(id int64) (SnapshotInfo, error) {
 	if err != nil {
 		return SnapshotInfo{}, fmt.Errorf("load snapshot %d: %w", id, err)
 	}
-	snapshot.CreatedAt, err = time.Parse(time.RFC3339, createdAt)
+	snapshot, err = snapshotFromRow(snapshot, createdAt)
 	if err != nil {
-		return SnapshotInfo{}, fmt.Errorf("parse snapshot time: %w", err)
+		return SnapshotInfo{}, err
 	}
 	return snapshot, nil
 }
@@ -213,6 +258,7 @@ func (s *Store) SnapshotByID(id int64) (SnapshotInfo, error) {
 func (s *Store) ListSnapshots() ([]SnapshotInfo, error) {
 	rows, err := s.db.Query(`
 		SELECT id, parent_id, kind, note, created_at, changed_files, changed_packages, changed_symbols,
+		       scanned_files, scan_ms, analyze_ms, write_ms,
 		       total_packages, total_files, total_symbols, total_calls, total_refs, total_tests
 		FROM snapshots
 		ORDER BY id DESC
@@ -235,6 +281,10 @@ func (s *Store) ListSnapshots() ([]SnapshotInfo, error) {
 			&snapshot.ChangedFiles,
 			&snapshot.ChangedPackages,
 			&snapshot.ChangedSymbols,
+			&snapshot.ScannedFiles,
+			&snapshot.ScanDurationMs,
+			&snapshot.AnalyzeDurationMs,
+			&snapshot.WriteDurationMs,
 			&snapshot.TotalPackages,
 			&snapshot.TotalFiles,
 			&snapshot.TotalSymbols,
@@ -244,9 +294,9 @@ func (s *Store) ListSnapshots() ([]SnapshotInfo, error) {
 		); err != nil {
 			return nil, fmt.Errorf("scan snapshot: %w", err)
 		}
-		snapshot.CreatedAt, err = time.Parse(time.RFC3339, createdAt)
+		snapshot, err = snapshotFromRow(snapshot, createdAt)
 		if err != nil {
-			return nil, fmt.Errorf("parse snapshot time: %w", err)
+			return nil, err
 		}
 		snapshots = append(snapshots, snapshot)
 	}
@@ -378,7 +428,7 @@ func deleteSnapshotsTx(tx *sql.Tx, ids []int64, allowDeleteCurrent bool) (int, e
 	}
 	sort.Slice(normalized, func(i, j int) bool { return normalized[i] < normalized[j] })
 
-	tables := []string{"packages", "files", "symbols", "package_deps", "refs", "call_edges", "tests", "test_links", "snapshots"}
+	tables := []string{"packages", "files", "symbols", "package_deps", "refs", "call_edges", "tests", "test_links", "change_cache", "snapshots"}
 	removed := 0
 	for _, id := range normalized {
 		exists, err := snapshotExistsTx(tx, id)
@@ -506,10 +556,17 @@ func vacuumDB(db *sql.DB) error {
 }
 
 func (s *Store) CommitSnapshot(kind, note string, scanned []codebase.ScanFile, result *codebase.Result, changes codebase.ChangeSet, full bool) (SnapshotInfo, error) {
+	return s.CommitSnapshotWithTelemetry(kind, note, scanned, result, changes, full, SnapshotCommitTelemetry{
+		ScannedFiles: len(scanned),
+	})
+}
+
+func (s *Store) CommitSnapshotWithTelemetry(kind, note string, scanned []codebase.ScanFile, result *codebase.Result, changes codebase.ChangeSet, full bool, telemetry SnapshotCommitTelemetry) (SnapshotInfo, error) {
 	current, ok, err := s.CurrentSnapshot()
 	if err != nil {
 		return SnapshotInfo{}, err
 	}
+	writeStarted := time.Now()
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -527,8 +584,9 @@ func (s *Store) CommitSnapshot(kind, note string, scanned []codebase.ScanFile, r
 		INSERT INTO snapshots (
 			parent_id, kind, created_at, note,
 			changed_files, changed_packages, changed_symbols,
+			scanned_files, scan_ms, analyze_ms, write_ms,
 			total_packages, total_files, total_symbols, total_calls, total_refs, total_tests
-		) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+		) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	`, parentID, kind, now, note)
 	if err != nil {
 		return SnapshotInfo{}, fmt.Errorf("insert snapshot: %w", err)
@@ -601,15 +659,25 @@ func (s *Store) CommitSnapshot(kind, note string, scanned []codebase.ScanFile, r
 		return SnapshotInfo{}, err
 	}
 
+	scannedFiles := telemetry.ScannedFiles
+	if scannedFiles <= 0 {
+		scannedFiles = len(scanned)
+	}
+	writeDurationMs := durationMillis(time.Since(writeStarted))
 	_, err = tx.Exec(`
 		UPDATE snapshots
 		SET changed_files = ?, changed_packages = ?, changed_symbols = ?,
+		    scanned_files = ?, scan_ms = ?, analyze_ms = ?, write_ms = ?,
 		    total_packages = ?, total_files = ?, total_symbols = ?, total_calls = ?, total_refs = ?, total_tests = ?
 		WHERE id = ?
 	`,
 		changes.Count(),
 		len(result.ImpactedPackage),
 		changedSymbols,
+		scannedFiles,
+		durationMillis(telemetry.ScanDuration),
+		durationMillis(telemetry.AnalyzeDuration),
+		writeDurationMs,
 		totalPackages,
 		totalFiles,
 		totalSymbols,

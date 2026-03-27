@@ -27,10 +27,16 @@ func mergeScannedFiles(parts ...[]codebase.ScanFile) []codebase.ScanFile {
 			if file.IsGo {
 				current.IsGo = true
 			}
+			if file.IsRust {
+				current.IsRust = true
+			}
 			current.IsTest = current.IsTest || file.IsTest
 			current.IsModule = current.IsModule || file.IsModule
 			if current.AbsPath == "" {
 				current.AbsPath = file.AbsPath
+			}
+			if current.PackageImportPath == "" {
+				current.PackageImportPath = file.PackageImportPath
 			}
 			if current.Hash == "" {
 				current.Hash = file.Hash
@@ -99,6 +105,10 @@ func isPythonScanFile(file codebase.ScanFile) bool {
 	return codebase.IsPythonFile(file.RelPath) || codebase.IsPythonProjectFile(filepath.Base(file.RelPath))
 }
 
+func isRustScanFile(file codebase.ScanFile) bool {
+	return codebase.IsRustFile(file.RelPath) || codebase.IsRustProjectFile(file.RelPath)
+}
+
 func isGoPreviousFile(file codebase.PreviousFile) bool {
 	return codebase.IsGoFile(file.RelPath) || codebase.IsGoProjectFile(file.RelPath)
 }
@@ -107,27 +117,42 @@ func isPythonPreviousFile(file codebase.PreviousFile) bool {
 	return codebase.IsPythonFile(file.RelPath) || codebase.IsPythonProjectFile(filepath.Base(file.RelPath))
 }
 
-func packageSets(modulePath string, scanned map[string]codebase.ScanFile) (map[string]struct{}, map[string]struct{}) {
-	goPackages := make(map[string]struct{})
-	pythonPackages := make(map[string]struct{})
-	for _, file := range scanned {
-		switch {
-		case codebase.IsGoFile(file.RelPath):
-			goPackages[codebase.PackageImportPath(modulePath, file.RelPath)] = struct{}{}
-		case codebase.IsPythonFile(file.RelPath):
-			pythonPackages[codebase.PackageImportPath(modulePath, file.RelPath)] = struct{}{}
-		}
-	}
-	return goPackages, pythonPackages
+func isRustPreviousFile(file codebase.PreviousFile) bool {
+	return codebase.IsRustFile(file.RelPath) || codebase.IsRustProjectFile(file.RelPath)
 }
 
-func splitPatterns(patterns []string, goPackages, pythonPackages map[string]struct{}) ([]string, []string) {
+func packageSets(modulePath string, scanned map[string]codebase.ScanFile) (map[string]struct{}, map[string]struct{}, map[string]struct{}) {
+	goPackages := make(map[string]struct{})
+	pythonPackages := make(map[string]struct{})
+	rustPackages := make(map[string]struct{})
+	for _, file := range scanned {
+		pkgPath := codebase.ScanPackageImportPath(modulePath, file)
+		switch {
+		case codebase.IsGoFile(file.RelPath):
+			if pkgPath != "" {
+				goPackages[pkgPath] = struct{}{}
+			}
+		case codebase.IsPythonFile(file.RelPath):
+			if pkgPath != "" {
+				pythonPackages[pkgPath] = struct{}{}
+			}
+		case codebase.IsRustFile(file.RelPath):
+			if pkgPath != "" {
+				rustPackages[pkgPath] = struct{}{}
+			}
+		}
+	}
+	return goPackages, pythonPackages, rustPackages
+}
+
+func splitPatterns(patterns []string, goPackages, pythonPackages, rustPackages map[string]struct{}) ([]string, []string, []string) {
 	if len(patterns) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	var goPatterns []string
 	var pythonPatterns []string
+	var rustPatterns []string
 	for _, pattern := range patterns {
 		if _, ok := goPackages[pattern]; ok {
 			goPatterns = append(goPatterns, pattern)
@@ -135,10 +160,14 @@ func splitPatterns(patterns []string, goPackages, pythonPackages map[string]stru
 		if _, ok := pythonPackages[pattern]; ok {
 			pythonPatterns = append(pythonPatterns, pattern)
 		}
+		if _, ok := rustPackages[pattern]; ok {
+			rustPatterns = append(rustPatterns, pattern)
+		}
 	}
 	sort.Strings(goPatterns)
 	sort.Strings(pythonPatterns)
-	return goPatterns, pythonPatterns
+	sort.Strings(rustPatterns)
+	return goPatterns, pythonPatterns, rustPatterns
 }
 
 func shouldAnalyze(enabled bool, scanned map[string]codebase.ScanFile, patterns, filteredPatterns []string) bool {

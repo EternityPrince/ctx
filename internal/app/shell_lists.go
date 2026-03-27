@@ -211,6 +211,11 @@ func (s *shellSession) renderRelatedList(title string, values []storage.RelatedS
 				return err
 			}
 		}
+		if value.Why != "" {
+			if _, err := fmt.Fprintf(s.stdout, "      %s %s\n", s.palette.label("why:"), value.Why); err != nil {
+				return err
+			}
+		}
 	}
 	if len(values) > shellListLimit {
 		if _, err := fmt.Fprintf(s.stdout, "  %s and %d more\n", s.palette.muted("..."), len(values)-shellListLimit); err != nil {
@@ -251,6 +256,11 @@ func (s *shellSession) renderRefList(title string, values []storage.RefView) err
 			value.Kind,
 		); err != nil {
 			return err
+		}
+		if value.Why != "" {
+			if _, err := fmt.Fprintf(s.stdout, "      %s %s\n", s.palette.label("why:"), value.Why); err != nil {
+				return err
+			}
 		}
 		if snippet := s.previewLine(value.UseFilePath, value.UseLine); snippet != "" {
 			if _, err := fmt.Fprintf(s.stdout, "      %s\n", snippet); err != nil {

@@ -318,6 +318,10 @@ func directTestWhy(test storage.TestView) string {
 		return test.Why
 	}
 	switch test.LinkKind {
+	case "direct":
+		return "direct test link"
+	case "related":
+		return "related test link"
 	case "receiver_match":
 		return "direct receiver match"
 	case "name_match":
@@ -414,9 +418,9 @@ func appTestConfidenceRank(confidence string) int {
 
 func appTestLinkKindRank(kind string) int {
 	switch kind {
-	case "receiver_match":
+	case "direct", "receiver_match":
 		return 3
-	case "name_match":
+	case "related", "name_match":
 		return 2
 	case "global_name_match":
 		return 1

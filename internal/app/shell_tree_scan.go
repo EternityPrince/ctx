@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/vladimirkasterin/ctx/internal/codebase"
 	"github.com/vladimirkasterin/ctx/internal/filter"
@@ -15,8 +14,12 @@ import (
 func scanProjectTree(root string) ([]string, []shellScannedFile, error) {
 	directories := make([]string, 0, 64)
 	files := make([]shellScannedFile, 0, 128)
+	walker, err := filter.NewWalker(root, false, "report")
+	if err != nil {
+		return nil, nil, err
+	}
 
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return filter.HandleWalkError(path, walkErr)
 		}
@@ -32,14 +35,18 @@ func scanProjectTree(root string) ([]string, []shellScannedFile, error) {
 		relPath = filepath.ToSlash(relPath)
 		name := entry.Name()
 		if entry.IsDir() {
-			if skip, _ := filter.SkipDirectory(path, name, false); skip {
+			if skip, _, err := walker.ShouldSkipDirectory(path, relPath, name); err != nil {
+				return err
+			} else if skip {
 				return filepath.SkipDir
 			}
 			directories = append(directories, relPath)
 			return nil
 		}
 
-		if strings.HasPrefix(name, ".") {
+		if skip, _, err := walker.ShouldSkipFile(path, relPath, name); err != nil {
+			return err
+		} else if skip {
 			return nil
 		}
 		info, err := entry.Info()
@@ -57,7 +64,7 @@ func scanProjectTree(root string) ([]string, []shellScannedFile, error) {
 			Path:      relPath,
 			SizeBytes: info.Size(),
 			LineCount: lineCount,
-			IsTest:    codebase.IsGoTestFile(relPath) || codebase.IsPythonTestFile(relPath),
+			IsTest:    codebase.IsGoTestFile(relPath) || codebase.IsPythonTestFile(relPath) || codebase.IsRustTestFile(relPath),
 		})
 		return nil
 	})

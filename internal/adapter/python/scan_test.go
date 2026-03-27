@@ -42,3 +42,31 @@ func TestScanRecognizesPythonProjectFilesAndTests(t *testing.T) {
 		t.Fatalf("expected app/main.py to be scanned as non-test source, got %+v", value)
 	}
 }
+
+func TestScanHonorsCtxIgnoreOverride(t *testing.T) {
+	root := t.TempDir()
+	writePythonFixture(t, root, ".gitignore", "*.py\n")
+	writePythonFixture(t, root, ".ctxignore", "!app/main.py\n")
+	writePythonFixture(t, root, "pyproject.toml", "[project]\nname = \"scan-demo\"\n")
+	writePythonFixture(t, root, "app/main.py", "def run():\n    return 1\n")
+	writePythonFixture(t, root, "app/ignored.py", "def ignored():\n    return 0\n")
+
+	adapter := NewAdapter()
+	files, err := adapter.Scan(root)
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+
+	foundMain := false
+	for _, file := range files {
+		if file.RelPath == "app/main.py" {
+			foundMain = true
+		}
+		if file.RelPath == "app/ignored.py" {
+			t.Fatalf("expected gitignored file to be skipped, got %+v", file)
+		}
+	}
+	if !foundMain {
+		t.Fatalf("expected .ctxignore to restore app/main.py, got %+v", files)
+	}
+}

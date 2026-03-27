@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseLegacyReportFlags(t *testing.T) {
-	command, err := Parse([]string{"-copy"})
+	command, err := Parse([]string{"-copy", "-keep-empty", "-include-generated", "-include-minified", "-include-artifacts"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
@@ -16,6 +19,28 @@ func TestParseLegacyReportFlags(t *testing.T) {
 	}
 	if !command.Report.CopyToClipboard {
 		t.Fatal("expected CopyToClipboard to be true")
+	}
+	if !command.Report.KeepEmpty || !command.Report.IncludeGenerated || !command.Report.IncludeMinified || !command.Report.IncludeArtifacts {
+		t.Fatalf("expected new dump flags to be parsed, got %+v", command.Report)
+	}
+}
+
+func TestParseLegacyReportLoadsCtxConfigProfile(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".ctxconfig")
+	if err := os.WriteFile(path, []byte("[dump]\nmax_file_size = 64\ninclude_generated = true\n"), 0o644); err != nil {
+		t.Fatalf("write .ctxconfig: %v", err)
+	}
+
+	command, err := Parse([]string{"dump", root})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if command.Report.MaxFileSize != 64 || !command.Report.IncludeGenerated {
+		t.Fatalf("expected dump config to be applied, got %+v", command.Report)
+	}
+	if command.Report.ConfigPath == "" {
+		t.Fatalf("expected config path to be captured, got %+v", command.Report)
 	}
 }
 
@@ -31,7 +56,7 @@ func TestParseRejectsCopyAndOutputTogether(t *testing.T) {
 }
 
 func TestParseIndexCommand(t *testing.T) {
-	command, err := Parse([]string{"index", ".", "--note", "initial"})
+	command, err := Parse([]string{"index", ".", "--note", "initial", "--explain"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
@@ -41,6 +66,38 @@ func TestParseIndexCommand(t *testing.T) {
 	}
 	if command.Note != "initial" {
 		t.Fatalf("expected note to be parsed, got %q", command.Note)
+	}
+	if !command.Explain {
+		t.Fatal("expected explain flag to be parsed")
+	}
+}
+
+func TestParseDoctorCommand(t *testing.T) {
+	command, err := Parse([]string{"doctor", "."})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if command.Name != "doctor" {
+		t.Fatalf("expected doctor command, got %q", command.Name)
+	}
+}
+
+func TestParseWatchCommand(t *testing.T) {
+	command, err := Parse([]string{"watch", ".", "--interval", "250ms", "--cycles", "3", "--explain"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if command.Name != "watch" {
+		t.Fatalf("expected watch command, got %q", command.Name)
+	}
+	if command.WatchInterval != 250*time.Millisecond {
+		t.Fatalf("expected watch interval to be parsed, got %s", command.WatchInterval)
+	}
+	if command.WatchCycles != 3 {
+		t.Fatalf("expected watch cycles=3, got %d", command.WatchCycles)
+	}
+	if !command.Explain {
+		t.Fatal("expected watch explain flag to be parsed")
 	}
 }
 
@@ -76,7 +133,7 @@ func TestParseImpactCommand(t *testing.T) {
 }
 
 func TestParseReportAICommand(t *testing.T) {
-	command, err := Parse([]string{"report", ".", "-ai", "-limit", "5"})
+	command, err := Parse([]string{"report", ".", "-ai", "-limit", "5", "--explain"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
@@ -92,6 +149,9 @@ func TestParseReportAICommand(t *testing.T) {
 	}
 	if command.Limit != 5 {
 		t.Fatalf("expected limit=5, got %d", command.Limit)
+	}
+	if !command.Explain {
+		t.Fatal("expected report explain flag to be parsed")
 	}
 }
 

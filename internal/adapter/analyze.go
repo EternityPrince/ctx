@@ -8,8 +8,9 @@ import (
 func (a *Adapter) Analyze(info project.Info, scanned map[string]codebase.ScanFile, patterns []string) (*codebase.Result, error) {
 	goScanned := filterScannedMap(scanned, isGoScanFile)
 	pythonScanned := filterScannedMap(scanned, isPythonScanFile)
-	goPackages, pythonPackages := packageSets(info.ModulePath, scanned)
-	goPatterns, pythonPatterns := splitPatterns(patterns, goPackages, pythonPackages)
+	rustScanned := filterScannedMap(scanned, isRustScanFile)
+	goPackages, pythonPackages, rustPackages := packageSets(info.ModulePath, scanned)
+	goPatterns, pythonPatterns, rustPatterns := splitPatterns(patterns, goPackages, pythonPackages, rustPackages)
 
 	result := codebase.NewResult(info.Root, info.ModulePath, info.GoVersion)
 
@@ -27,6 +28,14 @@ func (a *Adapter) Analyze(info project.Info, scanned map[string]codebase.ScanFil
 			return nil, err
 		}
 		codebase.MergeResult(result, pythonResult)
+	}
+
+	if shouldAnalyze(true, rustScanned, patterns, rustPatterns) {
+		rustResult, err := a.rustAdapter.Analyze(info, rustScanned, rustPatterns)
+		if err != nil {
+			return nil, err
+		}
+		codebase.MergeResult(result, rustResult)
 	}
 
 	for _, pkg := range patterns {

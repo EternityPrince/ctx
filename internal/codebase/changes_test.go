@@ -82,3 +82,105 @@ func TestSortResultOrdersAllFactSlices(t *testing.T) {
 		t.Fatalf("expected sorted test slices, got %+v", result)
 	}
 }
+
+func TestDetectGoChangesTreatsGoSumAsNoOp(t *testing.T) {
+	scanned := []ScanFile{
+		{RelPath: "go.mod", Hash: "same", IsModule: true, Identity: "example.com/project"},
+		{RelPath: "go.sum", Hash: "new", IsModule: true},
+		{RelPath: "pkg/service.go", Hash: "same", PackageImportPath: "example.com/project/pkg"},
+	}
+	previous := map[string]PreviousFile{
+		"go.mod":         {RelPath: "go.mod", Hash: "same", Identity: "example.com/project"},
+		"go.sum":         {RelPath: "go.sum", Hash: "old"},
+		"pkg/service.go": {RelPath: "pkg/service.go", PackageImportPath: "example.com/project/pkg", Hash: "same"},
+	}
+
+	plan := DetectGoChanges("example.com/project", scanned, previous)
+	if plan.FullReindex || plan.Changes.Count() != 1 || len(plan.ImpactedPackages) != 0 {
+		t.Fatalf("expected go.sum change to be a no-op invalidation, got %+v", plan)
+	}
+}
+
+func TestDetectGoChangesKeepsGoModSameModuleAsNoOp(t *testing.T) {
+	scanned := []ScanFile{
+		{RelPath: "go.mod", Hash: "new", IsModule: true, Identity: "example.com/project"},
+		{RelPath: "pkg/service.go", Hash: "same", PackageImportPath: "example.com/project/pkg"},
+	}
+	previous := map[string]PreviousFile{
+		"go.mod":         {RelPath: "go.mod", Hash: "old", Identity: "example.com/project"},
+		"pkg/service.go": {RelPath: "pkg/service.go", PackageImportPath: "example.com/project/pkg", Hash: "same"},
+	}
+
+	plan := DetectGoChanges("example.com/project", scanned, previous)
+	if plan.FullReindex || len(plan.ImpactedPackages) != 0 {
+		t.Fatalf("expected go.mod same-module change to avoid full reindex, got %+v", plan)
+	}
+}
+
+func TestDetectGoChangesMarksModuleRenameForFullReindex(t *testing.T) {
+	scanned := []ScanFile{{RelPath: "go.mod", Hash: "new", IsModule: true, Identity: "example.com/new"}}
+	previous := map[string]PreviousFile{"go.mod": {RelPath: "go.mod", Hash: "old", Identity: "example.com/old"}}
+
+	plan := DetectGoChanges("example.com/new", scanned, previous)
+	if !plan.FullReindex {
+		t.Fatalf("expected module path change to force full reindex, got %+v", plan)
+	}
+}
+
+func TestDetectPythonChangesTreatsProjectFilesAsNoOp(t *testing.T) {
+	scanned := []ScanFile{
+		{RelPath: "pyproject.toml", Hash: "new", IsModule: true},
+		{RelPath: "src/app.py", Hash: "same"},
+	}
+	previous := map[string]PreviousFile{
+		"pyproject.toml": {RelPath: "pyproject.toml", Hash: "old"},
+		"src/app.py":     {RelPath: "src/app.py", Hash: "same"},
+	}
+
+	plan := DetectPythonChanges("demo_project", scanned, previous)
+	if plan.FullReindex || len(plan.ImpactedPackages) != 0 {
+		t.Fatalf("expected python project metadata change to avoid full reindex, got %+v", plan)
+	}
+}
+
+func TestDetectRustChangesTreatsCargoLockAsNoOp(t *testing.T) {
+	scanned := []ScanFile{
+		{RelPath: "Cargo.lock", Hash: "new", IsModule: true},
+		{RelPath: "src/lib.rs", Hash: "same", IsRust: true, PackageImportPath: "demo"},
+	}
+	previous := map[string]PreviousFile{
+		"Cargo.lock": {RelPath: "Cargo.lock", Hash: "old"},
+		"src/lib.rs": {RelPath: "src/lib.rs", Hash: "same", PackageImportPath: "demo"},
+	}
+
+	plan := DetectRustChanges("demo", scanned, previous)
+	if plan.FullReindex || len(plan.ImpactedPackages) != 0 {
+		t.Fatalf("expected Cargo.lock change to avoid full reindex, got %+v", plan)
+	}
+}
+
+func TestDetectRustChangesTreatsStableCrateManifestAsNoOp(t *testing.T) {
+	scanned := []ScanFile{
+		{RelPath: "crates/app/Cargo.toml", Hash: "new", IsModule: true, Identity: "rust:crate:app"},
+		{RelPath: "crates/app/src/lib.rs", Hash: "same", IsRust: true, PackageImportPath: "app"},
+	}
+	previous := map[string]PreviousFile{
+		"crates/app/Cargo.toml": {RelPath: "crates/app/Cargo.toml", Hash: "old", Identity: "rust:crate:app"},
+		"crates/app/src/lib.rs": {RelPath: "crates/app/src/lib.rs", Hash: "same", PackageImportPath: "app"},
+	}
+
+	plan := DetectRustChanges("workspace", scanned, previous)
+	if plan.FullReindex || len(plan.ImpactedPackages) != 0 {
+		t.Fatalf("expected stable crate manifest change to avoid full reindex, got %+v", plan)
+	}
+}
+
+func TestDetectRustChangesKeepsWorkspaceManifestConservative(t *testing.T) {
+	scanned := []ScanFile{{RelPath: "Cargo.toml", Hash: "new", IsModule: true, Identity: "rust:workspace:"}}
+	previous := map[string]PreviousFile{"Cargo.toml": {RelPath: "Cargo.toml", Hash: "old", Identity: "rust:workspace:"}}
+
+	plan := DetectRustChanges("workspace", scanned, previous)
+	if plan.FullReindex || len(plan.ImpactedPackages) != 0 {
+		t.Fatalf("expected stable workspace manifest change to avoid full reindex, got %+v", plan)
+	}
+}

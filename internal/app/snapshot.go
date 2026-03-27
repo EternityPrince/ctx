@@ -135,7 +135,7 @@ func renderHumanSnapshots(stdout io.Writer, root, modulePath string, currentID i
 		}
 		if _, err := fmt.Fprintf(
 			stdout,
-			"%s %d kind=%s at=%s changed_files=%d changed_packages=%d changed_symbols=%d packages=%d files=%d symbols=%d refs=%d calls=%d tests=%d%s\n",
+			"%s %d kind=%s at=%s changed_files=%d changed_packages=%d changed_symbols=%d packages=%d files=%d symbols=%d refs=%d calls=%d tests=%d %s%s\n",
 			marker,
 			snapshot.ID,
 			snapshot.Kind,
@@ -149,6 +149,7 @@ func renderHumanSnapshots(stdout io.Writer, root, modulePath string, currentID i
 			snapshot.TotalRefs,
 			snapshot.TotalCalls,
 			snapshot.TotalTests,
+			formatSnapshotTelemetry(snapshot),
 			formatSnapshotNote(snapshot.Note),
 		); err != nil {
 			return err
@@ -164,7 +165,7 @@ func renderAISnapshots(stdout io.Writer, root, modulePath string, currentID int6
 	for _, snapshot := range snapshots {
 		if _, err := fmt.Fprintf(
 			stdout,
-			"snapshot=%d kind=%s at=%s parent=%s changed_files=%d changed_packages=%d changed_symbols=%d packages=%d files=%d symbols=%d refs=%d calls=%d tests=%d current=%t note=%q\n",
+			"snapshot=%d kind=%s at=%s parent=%s changed_files=%d changed_packages=%d changed_symbols=%d packages=%d files=%d symbols=%d refs=%d calls=%d tests=%d scan_ms=%d analyze_ms=%d write_ms=%d scanned_files=%d current=%t note=%q\n",
 			snapshot.ID,
 			snapshot.Kind,
 			snapshot.CreatedAt.Format(timeFormat),
@@ -178,6 +179,10 @@ func renderAISnapshots(stdout io.Writer, root, modulePath string, currentID int6
 			snapshot.TotalRefs,
 			snapshot.TotalCalls,
 			snapshot.TotalTests,
+			snapshot.ScanDurationMs,
+			snapshot.AnalyzeDurationMs,
+			snapshot.WriteDurationMs,
+			snapshot.ScannedFiles,
 			snapshot.ID == currentID,
 			snapshot.Note,
 		); err != nil {
@@ -194,7 +199,7 @@ func renderHumanSnapshot(stdout io.Writer, root, modulePath string, snapshot sto
 	}
 	if _, err := fmt.Fprintf(
 		stdout,
-		"Snapshot: %d\nRoot: %s\nModule: %s\nKind: %s\nCreated: %s\nParent: %s\nCurrent: %s\nChanged: files=%d packages=%d symbols=%d\nInventory: packages=%d files=%d symbols=%d refs=%d calls=%d tests=%d\n",
+		"Snapshot: %d\nRoot: %s\nModule: %s\nKind: %s\nCreated: %s\nParent: %s\nCurrent: %s\nChanged: files=%d packages=%d symbols=%d\nInventory: packages=%d files=%d symbols=%d refs=%d calls=%d tests=%d\nTimings: %s\n",
 		snapshot.ID,
 		root,
 		modulePath,
@@ -211,6 +216,7 @@ func renderHumanSnapshot(stdout io.Writer, root, modulePath string, snapshot sto
 		snapshot.TotalRefs,
 		snapshot.TotalCalls,
 		snapshot.TotalTests,
+		formatSnapshotTelemetry(snapshot),
 	); err != nil {
 		return err
 	}
@@ -224,7 +230,7 @@ func renderHumanSnapshot(stdout io.Writer, root, modulePath string, snapshot sto
 func renderAISnapshot(stdout io.Writer, root, modulePath string, snapshot storage.SnapshotInfo, isCurrent bool) error {
 	_, err := fmt.Fprintf(
 		stdout,
-		"root=%s\nmodule=%s\nsnapshot=%d\nkind=%s\ncreated_at=%s\nparent=%s\ncurrent=%t\nchanged_files=%d\nchanged_packages=%d\nchanged_symbols=%d\npackages=%d\nfiles=%d\nsymbols=%d\nrefs=%d\ncalls=%d\ntests=%d\nnote=%q\n",
+		"root=%s\nmodule=%s\nsnapshot=%d\nkind=%s\ncreated_at=%s\nparent=%s\ncurrent=%t\nchanged_files=%d\nchanged_packages=%d\nchanged_symbols=%d\npackages=%d\nfiles=%d\nsymbols=%d\nrefs=%d\ncalls=%d\ntests=%d\nscan_ms=%d\nanalyze_ms=%d\nwrite_ms=%d\nscanned_files=%d\nnote=%q\n",
 		root,
 		modulePath,
 		snapshot.ID,
@@ -241,6 +247,10 @@ func renderAISnapshot(stdout io.Writer, root, modulePath string, snapshot storag
 		snapshot.TotalRefs,
 		snapshot.TotalCalls,
 		snapshot.TotalTests,
+		snapshot.ScanDurationMs,
+		snapshot.AnalyzeDurationMs,
+		snapshot.WriteDurationMs,
+		snapshot.ScannedFiles,
 		snapshot.Note,
 	)
 	return err

@@ -60,6 +60,9 @@ func (a *Adapter) Analyze(info project.Info, scanned map[string]codebase.ScanFil
 		if !isLocalPackage(pkg, info.Root, info.ModulePath) {
 			continue
 		}
+		if len(pkg.Errors) > 0 {
+			continue
+		}
 		if pkg.Types == nil || pkg.TypesInfo == nil {
 			continue
 		}
@@ -147,14 +150,36 @@ func defaultLoadPatterns(scanned map[string]codebase.ScanFile) []string {
 }
 
 func localPackageLoadError(pkgs []*packages.Package, root, modulePath string) error {
+	healthyLocalPackages := 0
+	errors := make([]string, 0, len(pkgs))
+	seen := make(map[string]struct{})
 	for _, pkg := range pkgs {
 		if !isLocalPackage(pkg, root, modulePath) {
+			continue
+		}
+		if len(pkg.Errors) == 0 && pkg.Types != nil && pkg.TypesInfo != nil {
+			healthyLocalPackages++
 			continue
 		}
 		if len(pkg.Errors) == 0 {
 			continue
 		}
-		return fmt.Errorf("package loading returned errors: %s", pkg.Errors[0].Msg)
+
+		message := pkg.Errors[0].Msg
+		if pkg.PkgPath != "" {
+			message = pkg.PkgPath + ": " + message
+		}
+		if _, ok := seen[message]; ok {
+			continue
+		}
+		seen[message] = struct{}{}
+		errors = append(errors, message)
+	}
+	if healthyLocalPackages > 0 {
+		return nil
+	}
+	if len(errors) > 0 {
+		return fmt.Errorf("package loading returned errors: %s", strings.Join(errors, "; "))
 	}
 	return nil
 }

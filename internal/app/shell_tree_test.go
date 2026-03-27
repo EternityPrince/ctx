@@ -169,6 +169,35 @@ def helper() -> int:
 	}
 }
 
+func TestFileJourneyShowsRustFileSymbolsImmediately(t *testing.T) {
+	session, output := newIndexedShellSession(t, map[string]string{
+		"Cargo.toml": "[package]\nname = \"shell-demo\"\nedition = \"2021\"\n",
+		"src/lib.rs": `pub struct Service;
+
+impl Service {
+    pub fn run(&self) {}
+}
+
+pub fn helper() {}
+`,
+	})
+
+	if err := session.showFileJourney("src/lib.rs"); err != nil {
+		t.Fatalf("showFileJourney returned error: %v", err)
+	}
+
+	text := stripANSICodes(output.String())
+	if !strings.Contains(text, "File Journey") {
+		t.Fatalf("expected file journey screen, got:\n%s", text)
+	}
+	if strings.Contains(text, "No indexed symbols in this file") {
+		t.Fatalf("expected indexed rust symbols to be shown immediately, got:\n%s", text)
+	}
+	if !strings.Contains(text, "Service") || !strings.Contains(text, "run") || !strings.Contains(text, "helper") {
+		t.Fatalf("expected rust symbol inventory in file journey, got:\n%s", text)
+	}
+}
+
 func newIndexedShellSession(t *testing.T, files map[string]string) (*shellSession, *bytes.Buffer) {
 	t.Helper()
 	t.Setenv("CTX_HOME", t.TempDir())

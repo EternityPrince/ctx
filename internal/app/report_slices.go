@@ -94,7 +94,7 @@ func reportSliceTitle(scope string) string {
 	}
 }
 
-func renderHumanReportSlice(stdout io.Writer, projectRoot, modulePath string, status storage.ProjectStatus, report storage.ReportView, slice reportSliceView, limit int) error {
+func renderHumanReportSlice(stdout io.Writer, projectRoot, modulePath string, status storage.ProjectStatus, report storage.ReportView, slice reportSliceView, limit int, explain bool) error {
 	p := newPalette()
 	title := reportSliceTitle(slice.Scope)
 
@@ -121,34 +121,34 @@ func renderHumanReportSlice(stdout io.Writer, projectRoot, modulePath string, st
 
 	switch slice.Scope {
 	case "risky":
-		if err := renderHumanRankedSymbols(stdout, p, modulePath, "Risky Symbols", slice.Symbols); err != nil {
+		if err := renderHumanRankedSymbols(stdout, p, modulePath, "Risky Symbols", slice.Symbols, explain); err != nil {
 			return err
 		}
-		if err := renderHumanPackages(stdout, p, modulePath, "Risky Packages", slice.Packages); err != nil {
+		if err := renderHumanPackages(stdout, p, modulePath, "Risky Packages", slice.Packages, explain); err != nil {
 			return err
 		}
 		return renderHumanWeakChangedAreas(stdout, p, modulePath, "Changed Areas With Weak Test Links", slice.WeakChangedAreas)
 	case "seams":
-		if err := renderHumanRankedSymbols(stdout, p, modulePath, "Seam Symbols", slice.Symbols); err != nil {
+		if err := renderHumanRankedSymbols(stdout, p, modulePath, "Seam Symbols", slice.Symbols, explain); err != nil {
 			return err
 		}
-		return renderHumanPackages(stdout, p, modulePath, "Seam Packages", slice.Packages)
+		return renderHumanPackages(stdout, p, modulePath, "Seam Packages", slice.Packages, explain)
 	case "hotspots":
 		if err := renderHumanReportHotFiles(stdout, p, "Hot Files", slice.HotFiles); err != nil {
 			return err
 		}
-		if err := renderHumanRankedSymbols(stdout, p, modulePath, "Hot Functions and Methods", slice.Symbols); err != nil {
+		if err := renderHumanRankedSymbols(stdout, p, modulePath, "Hot Functions and Methods", slice.Symbols, explain); err != nil {
 			return err
 		}
-		if err := renderHumanRankedSymbols(stdout, p, modulePath, "Hot Types", slice.Types); err != nil {
+		if err := renderHumanRankedSymbols(stdout, p, modulePath, "Hot Types", slice.Types, explain); err != nil {
 			return err
 		}
-		return renderHumanPackages(stdout, p, modulePath, "Hot Packages", slice.Packages)
+		return renderHumanPackages(stdout, p, modulePath, "Hot Packages", slice.Packages, explain)
 	case "low-tested":
-		if err := renderHumanRankedSymbols(stdout, p, modulePath, "High-Signal Symbols With Thin Direct Links", slice.Symbols); err != nil {
+		if err := renderHumanRankedSymbols(stdout, p, modulePath, "High-Signal Symbols With Thin Direct Links", slice.Symbols, explain); err != nil {
 			return err
 		}
-		if err := renderHumanPackages(stdout, p, modulePath, "Low-Test Packages", slice.Packages); err != nil {
+		if err := renderHumanPackages(stdout, p, modulePath, "Low-Test Packages", slice.Packages, explain); err != nil {
 			return err
 		}
 		return renderHumanWeakChangedAreas(stdout, p, modulePath, "Changed Areas With Weak Test Links", slice.WeakChangedAreas)
@@ -189,7 +189,7 @@ func renderHumanReportSlice(stdout io.Writer, projectRoot, modulePath string, st
 	}
 }
 
-func renderAIReportSlice(stdout io.Writer, modulePath string, status storage.ProjectStatus, report storage.ReportView, slice reportSliceView, limit int) error {
+func renderAIReportSlice(stdout io.Writer, modulePath string, status storage.ProjectStatus, report storage.ReportView, slice reportSliceView, limit int, explain bool) error {
 	if _, err := fmt.Fprintf(
 		stdout,
 		"report_slice scope=%s snapshot=%d changed_now=%d limit=%d\n",
@@ -204,12 +204,28 @@ func renderAIReportSlice(stdout io.Writer, modulePath string, status storage.Pro
 	switch slice.Scope {
 	case "risky", "seams", "low-tested":
 		for _, item := range slice.Symbols {
-			if _, err := fmt.Fprintf(stdout, "symbol q=%s score=%d risk=%q\n", shortenQName(modulePath, item.Symbol.QName), item.Score, rankedSymbolRiskSummary(item)); err != nil {
+			if _, err := fmt.Fprintf(stdout, "symbol q=%s score=%d risk=%q", shortenQName(modulePath, item.Symbol.QName), item.Score, rankedSymbolRiskSummary(item)); err != nil {
+				return err
+			}
+			if explain {
+				if _, err := fmt.Fprintf(stdout, " why=%q", formatExplainInline(modulePath, item.QualityWhy, item.Provenance)); err != nil {
+					return err
+				}
+			}
+			if _, err := fmt.Fprintln(stdout); err != nil {
 				return err
 			}
 		}
 		for _, item := range slice.Packages {
-			if _, err := fmt.Fprintf(stdout, "pkg q=%s score=%d risk=%q\n", shortenQName(modulePath, item.Summary.ImportPath), item.Score, rankedPackageRiskSummary(item)); err != nil {
+			if _, err := fmt.Fprintf(stdout, "pkg q=%s score=%d risk=%q", shortenQName(modulePath, item.Summary.ImportPath), item.Score, rankedPackageRiskSummary(item)); err != nil {
+				return err
+			}
+			if explain {
+				if _, err := fmt.Fprintf(stdout, " why=%q", formatExplainInline(modulePath, item.QualityWhy, item.Provenance)); err != nil {
+					return err
+				}
+			}
+			if _, err := fmt.Fprintln(stdout); err != nil {
 				return err
 			}
 		}
@@ -225,17 +241,41 @@ func renderAIReportSlice(stdout io.Writer, modulePath string, status storage.Pro
 			}
 		}
 		for _, item := range slice.Symbols {
-			if _, err := fmt.Fprintf(stdout, "fn q=%s score=%d risk=%q\n", shortenQName(modulePath, item.Symbol.QName), item.Score, rankedSymbolRiskSummary(item)); err != nil {
+			if _, err := fmt.Fprintf(stdout, "fn q=%s score=%d risk=%q", shortenQName(modulePath, item.Symbol.QName), item.Score, rankedSymbolRiskSummary(item)); err != nil {
+				return err
+			}
+			if explain {
+				if _, err := fmt.Fprintf(stdout, " why=%q", formatExplainInline(modulePath, item.QualityWhy, item.Provenance)); err != nil {
+					return err
+				}
+			}
+			if _, err := fmt.Fprintln(stdout); err != nil {
 				return err
 			}
 		}
 		for _, item := range slice.Types {
-			if _, err := fmt.Fprintf(stdout, "type q=%s score=%d risk=%q\n", shortenQName(modulePath, item.Symbol.QName), item.Score, rankedSymbolRiskSummary(item)); err != nil {
+			if _, err := fmt.Fprintf(stdout, "type q=%s score=%d risk=%q", shortenQName(modulePath, item.Symbol.QName), item.Score, rankedSymbolRiskSummary(item)); err != nil {
+				return err
+			}
+			if explain {
+				if _, err := fmt.Fprintf(stdout, " why=%q", formatExplainInline(modulePath, item.QualityWhy, item.Provenance)); err != nil {
+					return err
+				}
+			}
+			if _, err := fmt.Fprintln(stdout); err != nil {
 				return err
 			}
 		}
 		for _, item := range slice.Packages {
-			if _, err := fmt.Fprintf(stdout, "pkg q=%s score=%d risk=%q\n", shortenQName(modulePath, item.Summary.ImportPath), item.Score, rankedPackageRiskSummary(item)); err != nil {
+			if _, err := fmt.Fprintf(stdout, "pkg q=%s score=%d risk=%q", shortenQName(modulePath, item.Summary.ImportPath), item.Score, rankedPackageRiskSummary(item)); err != nil {
+				return err
+			}
+			if explain {
+				if _, err := fmt.Fprintf(stdout, " why=%q", formatExplainInline(modulePath, item.QualityWhy, item.Provenance)); err != nil {
+					return err
+				}
+			}
+			if _, err := fmt.Fprintln(stdout); err != nil {
 				return err
 			}
 		}

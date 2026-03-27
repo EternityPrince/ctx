@@ -107,6 +107,62 @@ func TestApplySnapshotReturnsCurrentSnapshotWhenProjectIsUnchanged(t *testing.T)
 	}
 }
 
+func TestPlanUsesChangeCacheForUnchangedAndRepeatedChangedState(t *testing.T) {
+	t.Setenv("CTX_HOME", t.TempDir())
+
+	root := t.TempDir()
+	writeServiceFixture(t, root, "go.mod", "module example.com/cache\n\ngo 1.26\n")
+	writeServiceFixture(t, root, "main.go", "package main\n\nfunc main() {}\n")
+
+	service := core.NewService(adapter.NewAdapter())
+	state, err := service.OpenProject(root)
+	if err != nil {
+		t.Fatalf("OpenProject returned error: %v", err)
+	}
+	if _, committed, err := service.ApplySnapshot(state, "index", "initial", false); err != nil {
+		_ = state.Close()
+		t.Fatalf("ApplySnapshot returned error: %v", err)
+	} else if !committed {
+		_ = state.Close()
+		t.Fatal("expected initial snapshot to be committed")
+	}
+	if err := state.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	reopened, err := service.OpenProject(root)
+	if err != nil {
+		t.Fatalf("OpenProject unchanged returned error: %v", err)
+	}
+	noopPlan := service.Plan(reopened, false)
+	if !noopPlan.CacheHit || noopPlan.Changes.Count() != 0 {
+		_ = reopened.Close()
+		t.Fatalf("expected unchanged plan to come from cache, got %+v", noopPlan)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close unchanged state returned error: %v", err)
+	}
+
+	writeServiceFixture(t, root, "main.go", "package main\n\nfunc main() {\n\thelper()\n}\n\nfunc helper() {}\n")
+	changed, err := service.OpenProject(root)
+	if err != nil {
+		t.Fatalf("OpenProject changed returned error: %v", err)
+	}
+	firstPlan := service.Plan(changed, false)
+	if firstPlan.CacheHit {
+		_ = changed.Close()
+		t.Fatalf("expected first changed plan to be computed, got %+v", firstPlan)
+	}
+	secondPlan := service.Plan(changed, false)
+	if !secondPlan.CacheHit || secondPlan.Changes.Count() == 0 {
+		_ = changed.Close()
+		t.Fatalf("expected repeated changed plan to hit cache, got %+v", secondPlan)
+	}
+	if err := changed.Close(); err != nil {
+		t.Fatalf("Close changed state returned error: %v", err)
+	}
+}
+
 func writeServiceFixture(t *testing.T, root, relPath, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(relPath))

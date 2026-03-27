@@ -306,7 +306,7 @@ func (s *shellSession) showReportScope(scope string) error {
 		return err
 	}
 	if normalized == "project" {
-		if err := renderHumanReport(s.stdout, s.info.Root, s.info.ModulePath, status, view, watch); err != nil {
+		if err := renderHumanReport(s.stdout, s.info.Root, s.info.ModulePath, status, view, watch, s.composition, false); err != nil {
 			return err
 		}
 	} else {
@@ -314,7 +314,7 @@ func (s *shellSession) showReportScope(scope string) error {
 		if err != nil {
 			return err
 		}
-		if err := renderHumanReportSlice(s.stdout, s.info.Root, s.info.ModulePath, status, view, slice, 6); err != nil {
+		if err := renderHumanReportSlice(s.stdout, s.info.Root, s.info.ModulePath, status, view, slice, 6, false); err != nil {
 			return err
 		}
 	}

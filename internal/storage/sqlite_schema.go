@@ -27,6 +27,10 @@ func (s *Store) init() error {
 			changed_files INTEGER NOT NULL DEFAULT 0,
 			changed_packages INTEGER NOT NULL DEFAULT 0,
 			changed_symbols INTEGER NOT NULL DEFAULT 0,
+			scanned_files INTEGER NOT NULL DEFAULT 0,
+			scan_ms INTEGER NOT NULL DEFAULT 0,
+			analyze_ms INTEGER NOT NULL DEFAULT 0,
+			write_ms INTEGER NOT NULL DEFAULT 0,
 			total_packages INTEGER NOT NULL DEFAULT 0,
 			total_files INTEGER NOT NULL DEFAULT 0,
 			total_symbols INTEGER NOT NULL DEFAULT 0,
@@ -46,6 +50,7 @@ func (s *Store) init() error {
 			snapshot_id INTEGER NOT NULL,
 			rel_path TEXT NOT NULL,
 			package_import_path TEXT NOT NULL,
+			identity TEXT NOT NULL DEFAULT '',
 			content_hash TEXT NOT NULL,
 			size_bytes INTEGER NOT NULL,
 			is_test INTEGER NOT NULL DEFAULT 0,
@@ -116,6 +121,13 @@ func (s *Store) init() error {
 			confidence TEXT NOT NULL,
 			PRIMARY KEY (snapshot_id, test_key, symbol_key, link_kind)
 		)`,
+		`CREATE TABLE IF NOT EXISTS change_cache (
+			snapshot_id INTEGER NOT NULL,
+			scan_fingerprint TEXT NOT NULL,
+			plan_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (snapshot_id, scan_fingerprint)
+		)`,
 		`CREATE INDEX IF NOT EXISTS symbols_name_idx ON symbols (snapshot_id, name)`,
 		`CREATE INDEX IF NOT EXISTS symbols_qname_idx ON symbols (snapshot_id, qname)`,
 		`CREATE INDEX IF NOT EXISTS files_pkg_idx ON files (snapshot_id, package_import_path)`,
@@ -125,6 +137,7 @@ func (s *Store) init() error {
 		`CREATE INDEX IF NOT EXISTS refs_source_idx ON refs (snapshot_id, from_symbol_key)`,
 		`CREATE INDEX IF NOT EXISTS deps_target_idx ON package_deps (snapshot_id, to_package_import_path)`,
 		`CREATE INDEX IF NOT EXISTS tests_symbol_idx ON test_links (snapshot_id, symbol_key)`,
+		`CREATE INDEX IF NOT EXISTS change_cache_created_idx ON change_cache (snapshot_id, created_at)`,
 	}
 
 	for _, stmt := range stmts {
@@ -134,6 +147,23 @@ func (s *Store) init() error {
 	}
 	if _, err := s.db.Exec(`ALTER TABLE project_meta ADD COLUMN snapshot_limit INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 		return fmt.Errorf("add snapshot_limit column: %w", err)
+	}
+	for _, columnStmt := range []struct {
+		stmt string
+		name string
+	}{
+		{stmt: `ALTER TABLE files ADD COLUMN identity TEXT NOT NULL DEFAULT ''`, name: "files.identity"},
+		{stmt: `ALTER TABLE snapshots ADD COLUMN scanned_files INTEGER NOT NULL DEFAULT 0`, name: "scanned_files"},
+		{stmt: `ALTER TABLE snapshots ADD COLUMN scan_ms INTEGER NOT NULL DEFAULT 0`, name: "scan_ms"},
+		{stmt: `ALTER TABLE snapshots ADD COLUMN analyze_ms INTEGER NOT NULL DEFAULT 0`, name: "analyze_ms"},
+		{stmt: `ALTER TABLE snapshots ADD COLUMN write_ms INTEGER NOT NULL DEFAULT 0`, name: "write_ms"},
+	} {
+		if _, err := s.db.Exec(columnStmt.stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			return fmt.Errorf("add %s column: %w", columnStmt.name, err)
+		}
+	}
+	if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, sqliteSchemaVersion)); err != nil {
+		return fmt.Errorf("set sqlite schema version: %w", err)
 	}
 	return nil
 }

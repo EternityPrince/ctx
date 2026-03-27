@@ -57,6 +57,7 @@ func runProjectReport(command cli.Command, stdout io.Writer) error {
 		_, err := fmt.Fprintf(stdout, "No index snapshot for %s. Run `ctx index %s` first.\n", state.Info.ModulePath, state.Info.Root)
 		return err
 	}
+	composition := summarizeProjectComposition(state.Scanned)
 
 	scope := normalizeReportSliceScope(command.Scope)
 	loadLimit := command.Limit
@@ -67,6 +68,11 @@ func runProjectReport(command cli.Command, stdout io.Writer) error {
 	view, err := state.Store.LoadReportView(loadLimit)
 	if err != nil {
 		return err
+	}
+	if command.Explain {
+		if err := state.Store.ExplainReportView(&view); err != nil {
+			return err
+		}
 	}
 	watch, err := buildReportTestWatch(state.Store, view)
 	if err != nil {
@@ -80,16 +86,16 @@ func runProjectReport(command cli.Command, stdout io.Writer) error {
 		}
 		switch command.OutputMode {
 		case cli.OutputAI:
-			return renderAIReportSlice(stdout, state.Info.ModulePath, status, view, slice, command.Limit)
+			return renderAIReportSlice(stdout, state.Info.ModulePath, status, view, slice, command.Limit, command.Explain)
 		default:
-			return renderHumanReportSlice(stdout, state.Info.Root, state.Info.ModulePath, status, view, slice, command.Limit)
+			return renderHumanReportSlice(stdout, state.Info.Root, state.Info.ModulePath, status, view, slice, command.Limit, command.Explain)
 		}
 	}
 
 	switch command.OutputMode {
 	case cli.OutputAI:
-		return renderAIReport(stdout, state.Info.ModulePath, status, view, watch)
+		return renderAIReport(stdout, state.Info.ModulePath, status, view, watch, composition, command.Explain)
 	default:
-		return renderHumanReport(stdout, state.Info.Root, state.Info.ModulePath, status, view, watch)
+		return renderHumanReport(stdout, state.Info.Root, state.Info.ModulePath, status, view, watch, composition, command.Explain)
 	}
 }

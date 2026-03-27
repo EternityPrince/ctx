@@ -66,7 +66,7 @@ func (s *shellSession) showTreeHotPage(page int) error {
 	}
 	if _, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  %s %s  %s files=%d\n  %s rank is built from callers, refs, tests, and reverse deps\n  %s compact risk flags surface hotspots and recent weakly linked areas\n\n",
+		"%s\n  %s %s  %s files=%d\n  %s rank is built from graph signals, recent change proximity, and entrypoint heuristics\n  %s compact risk flags surface hotspots and recent weakly linked areas\n\n",
 		s.palette.section("Hot Paths"),
 		s.palette.label("Scope:"),
 		treeScopeLabel(s.treeScope),
@@ -129,39 +129,18 @@ func (s *shellSession) showTreeHotPage(page int) error {
 }
 
 func rankShellHotFiles(view storage.ReportView, scope string) []shellHotFile {
-	byFile := make(map[string]*shellHotFile)
-	appendSymbol := func(item storage.RankedSymbol) {
-		if !pathInTreeScope(item.Symbol.FilePath, scope) {
-			return
+	files := make([]shellHotFile, 0, len(view.TopFiles))
+	for _, item := range view.TopFiles {
+		if !pathInTreeScope(item.Summary.FilePath, scope) {
+			continue
 		}
-		entry, ok := byFile[item.Symbol.FilePath]
-		if !ok {
-			entry = &shellHotFile{
-				Path:      item.Symbol.FilePath,
-				Line:      item.Symbol.Line,
-				SymbolKey: item.Symbol.SymbolKey,
-			}
-			byFile[item.Symbol.FilePath] = entry
-		}
-		entry.Score += item.Score
-		if entry.Line == 0 || (item.Symbol.Line > 0 && item.Symbol.Line < entry.Line) {
-			entry.Line = item.Symbol.Line
-			entry.SymbolKey = item.Symbol.SymbolKey
-		}
-		if len(entry.Symbols) < 4 && !containsHotSymbol(entry.Symbols, item.Symbol.Name) {
-			entry.Symbols = append(entry.Symbols, item.Symbol.Name)
-		}
-	}
-	for _, item := range view.TopFunctions {
-		appendSymbol(item)
-	}
-	for _, item := range view.TopTypes {
-		appendSymbol(item)
-	}
-
-	files := make([]shellHotFile, 0, len(byFile))
-	for _, item := range byFile {
-		files = append(files, *item)
+		files = append(files, shellHotFile{
+			Path:      item.Summary.FilePath,
+			Line:      item.PrimaryLine,
+			Score:     item.Score,
+			SymbolKey: item.PrimarySymbolKey,
+			Symbols:   append([]string(nil), item.TopSymbols...),
+		})
 	}
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].Score != files[j].Score {
@@ -170,13 +149,4 @@ func rankShellHotFiles(view storage.ReportView, scope string) []shellHotFile {
 		return files[i].Path < files[j].Path
 	})
 	return files
-}
-
-func containsHotSymbol(values []string, name string) bool {
-	for _, value := range values {
-		if value == name {
-			return true
-		}
-	}
-	return false
 }

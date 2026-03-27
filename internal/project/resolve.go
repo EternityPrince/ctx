@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 type Info struct {
@@ -13,7 +14,6 @@ type Info struct {
 	GoVersion  string
 	Language   string
 	ID         string
-	DBPath     string
 }
 
 func Resolve(path string) (Info, error) {
@@ -30,13 +30,46 @@ func Resolve(path string) (Info, error) {
 		absPath = filepath.Dir(absPath)
 	}
 
-	if projectInfo, err := resolveGoProject(absPath); err == nil {
-		return projectInfo, nil
-	} else if pyInfo, pyErr := resolvePythonProject(absPath); pyErr == nil {
-		return pyInfo, nil
-	} else {
-		return Info{}, errors.Join(err, pyErr)
+	type candidate struct {
+		info     Info
+		priority int
 	}
+
+	resolvers := []struct {
+		priority int
+		resolve  func(string) (Info, error)
+	}{
+		{priority: 0, resolve: resolveGoProject},
+		{priority: 1, resolve: resolveRustProject},
+		{priority: 2, resolve: resolvePythonProject},
+	}
+
+	candidates := make([]candidate, 0, len(resolvers))
+	errs := make([]error, 0, len(resolvers))
+	for _, resolver := range resolvers {
+		projectInfo, resolveErr := resolver.resolve(absPath)
+		if resolveErr != nil {
+			errs = append(errs, resolveErr)
+			continue
+		}
+		candidates = append(candidates, candidate{
+			info:     projectInfo,
+			priority: resolver.priority,
+		})
+	}
+	if len(candidates) == 0 {
+		return Info{}, errors.Join(errs...)
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		leftDepth := pathDepth(candidates[i].info.Root)
+		rightDepth := pathDepth(candidates[j].info.Root)
+		if leftDepth == rightDepth {
+			return candidates[i].priority < candidates[j].priority
+		}
+		return leftDepth > rightDepth
+	})
+	return candidates[0].info, nil
 }
 
 func resolveGoProject(path string) (Info, error) {
@@ -61,19 +94,34 @@ func resolvePythonProject(path string) (Info, error) {
 	return buildInfo(root, modulePath, version, "python")
 }
 
-func buildInfo(root, modulePath, version, language string) (Info, error) {
-	projectID := ProjectID(root)
-	dbPath, err := DBPath(projectID)
+func resolveRustProject(path string) (Info, error) {
+	root, modulePath, version, err := findRustProjectRoot(path)
 	if err != nil {
 		return Info{}, err
 	}
+	return buildInfo(root, modulePath, version, "rust")
+}
 
+func buildInfo(root, modulePath, version, language string) (Info, error) {
 	return Info{
 		Root:       root,
 		ModulePath: modulePath,
 		GoVersion:  version,
 		Language:   language,
-		ID:         projectID,
-		DBPath:     dbPath,
+		ID:         ProjectID(root),
 	}, nil
+}
+
+func pathDepth(path string) int {
+	clean := filepath.Clean(path)
+	depth := 0
+	for {
+		parent := filepath.Dir(clean)
+		if parent == clean {
+			break
+		}
+		depth++
+		clean = parent
+	}
+	return depth
 }

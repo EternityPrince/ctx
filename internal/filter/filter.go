@@ -30,6 +30,9 @@ func SkipDirectory(path, name string, includeHidden bool) (bool, string) {
 	if matchesIgnoredDirectoryPath(path) {
 		return true, "ignored directory path"
 	}
+	if reason := rustSkipDirectoryReason(path, name); reason != "" {
+		return true, reason
+	}
 	if !includeHidden && strings.HasPrefix(name, ".") {
 		return true, "hidden directory"
 	}
@@ -120,4 +123,24 @@ func IgnoredDirectoryPaths() []string {
 		paths = append(paths, filepath.Clean(value))
 	}
 	return paths
+}
+
+func rustSkipDirectoryReason(path, name string) string {
+	name = strings.TrimSpace(name)
+	switch name {
+	case "target":
+		return "rust build directory"
+	case ".rust-analyzer", ".rust-analyzer-cache":
+		return "rust analyzer cache"
+	}
+
+	cleanPath := filepath.ToSlash(filepath.Clean(path))
+	switch {
+	case strings.Contains(cleanPath, "/.cargo/registry") || strings.HasSuffix(cleanPath, "/.cargo/registry"):
+		return "rust cargo registry cache"
+	case strings.Contains(cleanPath, "/.cargo/git") || strings.HasSuffix(cleanPath, "/.cargo/git"):
+		return "rust cargo git cache"
+	default:
+		return ""
+	}
 }

@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/vladimirkasterin/ctx/internal/storage"
@@ -51,62 +50,17 @@ func (m *tuiModel) rankedTypeItems(values []storage.RankedSymbol) []tuiItem {
 }
 
 func (m *tuiModel) hotFileItems() []tuiItem {
-	type fileScore struct {
-		Path    string
-		Score   int
-		Symbols []string
-		Line    int
-	}
-	byFile := map[string]*fileScore{}
-	appendValue := func(value storage.RankedSymbol) {
-		item, ok := byFile[value.Symbol.FilePath]
-		if !ok {
-			item = &fileScore{
-				Path: value.Symbol.FilePath,
-				Line: value.Symbol.Line,
-			}
-			byFile[value.Symbol.FilePath] = item
-		}
-		item.Score += value.Score
-		if len(item.Symbols) < 4 {
-			item.Symbols = append(item.Symbols, value.Symbol.Name)
-		}
-		if item.Line == 0 || value.Symbol.Line < item.Line {
-			item.Line = value.Symbol.Line
-		}
-	}
-	for _, value := range m.report.TopFunctions {
-		appendValue(value)
-	}
-	for _, value := range m.report.TopTypes {
-		appendValue(value)
-	}
-
-	keys := make([]string, 0, len(byFile))
-	for key := range byFile {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		left := byFile[keys[i]]
-		right := byFile[keys[j]]
-		if left.Score != right.Score {
-			return left.Score > right.Score
-		}
-		return left.Path < right.Path
-	})
-
-	items := make([]tuiItem, 0, len(keys))
-	for _, key := range keys {
-		value := byFile[key]
+	items := make([]tuiItem, 0, len(m.report.TopFiles))
+	for _, value := range m.report.TopFiles {
 		items = append(items, tuiItem{
 			Kind:     "file",
-			Title:    value.Path,
-			Subtitle: fmt.Sprintf("score=%d | symbols=%s", value.Score, strings.Join(value.Symbols, ", ")),
-			Detail:   "Open file travel mode",
-			Preview:  fmt.Sprintf("Highlighted symbols: %s", strings.Join(value.Symbols, ", ")),
-			FilePath: value.Path,
-			Line:     value.Line,
-			CopyText: value.Path,
+			Title:    value.Summary.FilePath,
+			Subtitle: fmt.Sprintf("score=%d | symbols=%s", value.Score, strings.Join(value.TopSymbols, ", ")),
+			Detail:   strings.Join(value.QualityWhy, " | "),
+			Preview:  fmt.Sprintf("Highlighted symbols: %s", strings.Join(value.TopSymbols, ", ")),
+			FilePath: value.Summary.FilePath,
+			Line:     value.PrimaryLine,
+			CopyText: value.Summary.FilePath,
 		})
 	}
 	return items

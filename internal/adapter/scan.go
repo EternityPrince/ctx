@@ -3,7 +3,7 @@ package adapter
 import "github.com/vladimirkasterin/ctx/internal/codebase"
 
 func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
-	parts := make([][]codebase.ScanFile, 0, 2)
+	parts := make([][]codebase.ScanFile, 0, 3)
 
 	if hasGoProject(root) {
 		files, err := a.goAdapter.Scan(root)
@@ -14,6 +14,12 @@ func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 	}
 
 	files, err := a.pythonAdapter.Scan(root)
+	if err != nil {
+		return nil, err
+	}
+	parts = append(parts, files)
+
+	files, err = a.rustAdapter.Scan(root)
 	if err != nil {
 		return nil, err
 	}

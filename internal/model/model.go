@@ -7,6 +7,7 @@ type Snapshot struct {
 	GeneratedAt time.Time
 	Directories []string
 	Files       []File
+	Decisions   []Decision
 	Stats       Stats
 }
 
@@ -35,6 +36,13 @@ type Stats struct {
 	TopFiles           []FileMetric
 	Extensions         []ExtensionMetric
 	SkipReasons        []NamedMetric
+}
+
+type Decision struct {
+	Path     string
+	Kind     string
+	Included bool
+	Reason   string
 }
 
 type FileMetric struct {

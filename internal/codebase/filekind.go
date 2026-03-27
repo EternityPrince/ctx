@@ -27,6 +27,9 @@ func IsPythonFile(path string) bool {
 }
 
 func IsPythonTestFile(path string) bool {
+	if !IsPythonFile(path) {
+		return false
+	}
 	base := baseName(path)
 	if base == "conftest.py" {
 		return true
@@ -48,8 +51,33 @@ func IsPythonProjectFile(name string) bool {
 	}
 }
 
+func IsRustFile(path string) bool {
+	return strings.HasSuffix(normalizePath(strings.ToLower(path)), ".rs")
+}
+
+func IsRustProjectFile(path string) bool {
+	switch baseName(path) {
+	case "Cargo.toml", "Cargo.lock":
+		return true
+	default:
+		return false
+	}
+}
+
+func IsRustTestFile(path string) bool {
+	if !IsRustFile(path) {
+		return false
+	}
+	path = normalizePath(path)
+	if strings.HasPrefix(path, "tests/") || strings.Contains(path, "/tests/") {
+		return true
+	}
+	base := baseName(path)
+	return strings.HasSuffix(base, "_test.rs")
+}
+
 func IsIndexedSourceFile(path string) bool {
-	return IsGoFile(path) || IsPythonFile(path)
+	return IsGoFile(path) || IsPythonFile(path) || IsRustFile(path)
 }
 
 func normalizePath(path string) string {

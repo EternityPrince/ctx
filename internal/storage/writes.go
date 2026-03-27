@@ -9,8 +9,8 @@ import (
 
 func insertFiles(tx *sql.Tx, snapshotID int64, modulePath, root string, scanned []codebase.ScanFile) error {
 	stmt, err := tx.Prepare(`
-		INSERT INTO files (snapshot_id, rel_path, package_import_path, content_hash, size_bytes, is_test)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO files (snapshot_id, rel_path, package_import_path, identity, content_hash, size_bytes, is_test)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare insert files: %w", err)
@@ -18,8 +18,8 @@ func insertFiles(tx *sql.Tx, snapshotID int64, modulePath, root string, scanned 
 	defer stmt.Close()
 
 	for _, file := range scanned {
-		pkg := derivePackageForFile(root, modulePath, file.RelPath)
-		if _, err := stmt.Exec(snapshotID, file.RelPath, pkg, file.Hash, file.SizeBytes, boolInt(file.IsTest)); err != nil {
+		pkg := derivePackageForFile(root, modulePath, file)
+		if _, err := stmt.Exec(snapshotID, file.RelPath, pkg, file.Identity, file.Hash, file.SizeBytes, boolInt(file.IsTest)); err != nil {
 			return fmt.Errorf("insert file %s: %w", file.RelPath, err)
 		}
 	}

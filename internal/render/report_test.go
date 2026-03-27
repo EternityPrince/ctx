@@ -71,3 +71,28 @@ func TestReportSummaryOnly(t *testing.T) {
 		t.Fatal("summary-only report should not include file section")
 	}
 }
+
+func TestReportExplainabilityIncludesDecisionLog(t *testing.T) {
+	snapshot := &model.Snapshot{
+		Root:        "/tmp/project",
+		GeneratedAt: time.Now(),
+		Decisions: []model.Decision{
+			{Path: "main.go", Kind: "file", Included: true, Reason: "passed filters"},
+			{Path: "generated/out.txt", Kind: "file", Included: false, Reason: "ignored by .ctxconfig [dump]"},
+		},
+		Stats: model.Stats{
+			FilesIncluded: 1,
+		},
+	}
+
+	report := Report(snapshot, tree.Build(snapshot.Root, nil, nil), config.Options{
+		Explain:       true,
+		ConfigPath:    "/tmp/project/.ctxconfig",
+		ConfigProfile: "dump",
+	})
+	for _, expected := range []string{"Explainability:", "Decision log:", "included", "ignored by .ctxconfig [dump]"} {
+		if !strings.Contains(report, expected) {
+			t.Fatalf("expected explainability output %q, got:\n%s", expected, report)
+		}
+	}
+}

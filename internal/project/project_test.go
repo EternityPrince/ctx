@@ -95,6 +95,106 @@ func TestResolveDetectsPythonProjectFromPyProject(t *testing.T) {
 	}
 }
 
+func TestResolveDoesNotCreateStoreLayout(t *testing.T) {
+	tempDir := t.TempDir()
+	storeRoot := filepath.Join(tempDir, "ctx-home")
+	root := filepath.Join(tempDir, "workspace")
+
+	t.Setenv("CTX_HOME", storeRoot)
+	mustMkdirAll(t, root)
+	mustWriteFile(t, filepath.Join(root, "go.mod"), "module example.com/workspace\n\ngo 1.25\n")
+
+	info, err := Resolve(root)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if info.ID == "" {
+		t.Fatal("expected resolved project id")
+	}
+	if _, err := os.Stat(storeRoot); !os.IsNotExist(err) {
+		t.Fatalf("Resolve should not create CTX_HOME, stat err=%v", err)
+	}
+}
+
+func TestResolveDetectsRustProjectFromCargoToml(t *testing.T) {
+	tempDir := t.TempDir()
+	projectRoot := filepath.Join(tempDir, "rust-demo")
+	start := filepath.Join(projectRoot, "src")
+
+	mustMkdirAll(t, start)
+	mustWriteFile(t, filepath.Join(projectRoot, "Cargo.toml"), "[package]\nname = \"rust-demo\"\nedition = \"2021\"\n")
+	mustWriteFile(t, filepath.Join(projectRoot, "src", "lib.rs"), "pub fn run() {}\n")
+
+	info, err := Resolve(start)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if info.Root != projectRoot {
+		t.Fatalf("expected rust root %q, got %q", projectRoot, info.Root)
+	}
+	if info.Language != "rust" {
+		t.Fatalf("expected rust language, got %q", info.Language)
+	}
+	if info.ModulePath != "rust-demo" {
+		t.Fatalf("expected crate name %q, got %q", "rust-demo", info.ModulePath)
+	}
+	if info.GoVersion != "2021" {
+		t.Fatalf("expected rust edition %q, got %q", "2021", info.GoVersion)
+	}
+}
+
+func TestResolveUsesRustWorkspaceRootFromMemberPath(t *testing.T) {
+	tempDir := t.TempDir()
+	workspaceRoot := filepath.Join(tempDir, "workspace")
+	memberRoot := filepath.Join(workspaceRoot, "crates", "api")
+	start := filepath.Join(memberRoot, "src")
+
+	mustMkdirAll(t, start)
+	mustWriteFile(t, filepath.Join(workspaceRoot, "Cargo.toml"), "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.package]\nedition = \"2021\"\n")
+	mustWriteFile(t, filepath.Join(memberRoot, "Cargo.toml"), "[package]\nname = \"api\"\nedition = \"2024\"\n")
+	mustWriteFile(t, filepath.Join(memberRoot, "src", "lib.rs"), "pub fn run() {}\n")
+
+	info, err := Resolve(start)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if info.Root != workspaceRoot {
+		t.Fatalf("expected workspace root %q, got %q", workspaceRoot, info.Root)
+	}
+	if info.Language != "rust" {
+		t.Fatalf("expected rust language, got %q", info.Language)
+	}
+	if info.ModulePath != filepath.Base(workspaceRoot) {
+		t.Fatalf("expected workspace fallback name %q, got %q", filepath.Base(workspaceRoot), info.ModulePath)
+	}
+	if info.GoVersion != "2021" {
+		t.Fatalf("expected workspace edition %q, got %q", "2021", info.GoVersion)
+	}
+}
+
+func TestResolvePrefersNestedRustProjectOverAncestorGoModule(t *testing.T) {
+	tempDir := t.TempDir()
+	repoRoot := filepath.Join(tempDir, "repo")
+	rustRoot := filepath.Join(repoRoot, "tools", "worker")
+	start := filepath.Join(rustRoot, "src")
+
+	mustMkdirAll(t, start)
+	mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/repo\n\ngo 1.26\n")
+	mustWriteFile(t, filepath.Join(rustRoot, "Cargo.toml"), "[package]\nname = \"worker\"\nedition = \"2021\"\n")
+	mustWriteFile(t, filepath.Join(rustRoot, "src", "main.rs"), "fn main() {}\n")
+
+	info, err := Resolve(start)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if info.Root != rustRoot {
+		t.Fatalf("expected nested rust root %q, got %q", rustRoot, info.Root)
+	}
+	if info.Language != "rust" {
+		t.Fatalf("expected rust language, got %q", info.Language)
+	}
+}
+
 func TestFindPythonProjectRootFallsBackToRepositoryCandidate(t *testing.T) {
 	tempDir := t.TempDir()
 	repoRoot := filepath.Join(tempDir, "repo")

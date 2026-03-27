@@ -20,6 +20,7 @@ func scanRelatedSymbols(rows *sql.Rows) ([]RelatedSymbolView, error) {
 		); err != nil {
 			return nil, fmt.Errorf("scan edge: %w", err)
 		}
+		edge.Why = describeCallRelation(edge.Relation)
 		edges = append(edges, edge)
 	}
 	if err := rows.Err(); err != nil {
@@ -114,12 +115,16 @@ func forwardColumns(table string) string {
 	}
 }
 
-func derivePackageForFile(root, modulePath, relPath string) string {
-	if relPath == "go.mod" || relPath == "go.sum" {
+func derivePackageForFile(root, modulePath string, file codebase.ScanFile) string {
+	if value := strings.TrimSpace(file.PackageImportPath); value != "" {
+		return value
+	}
+	relPath := file.RelPath
+	if relPath == "go.mod" || relPath == "go.sum" || relPath == "Cargo.toml" || relPath == "Cargo.lock" {
 		return ""
 	}
 	_ = root
-	return codebase.PackageImportPath(modulePath, relPath)
+	return codebase.ScanPackageImportPath(modulePath, file)
 }
 
 func boolInt(value bool) int {
@@ -194,9 +199,9 @@ func testConfidenceRank(confidence string) int {
 
 func testLinkKindRank(kind string) int {
 	switch kind {
-	case "receiver_match":
+	case "direct", "receiver_match":
 		return 3
-	case "name_match":
+	case "related", "name_match":
 		return 2
 	case "global_name_match":
 		return 1
@@ -208,6 +213,10 @@ func testLinkKindRank(kind string) int {
 func describeDirectTestLink(kind, confidence string) string {
 	label := "direct test link"
 	switch kind {
+	case "direct":
+		label = "direct test link"
+	case "related":
+		label = "related test link"
 	case "receiver_match":
 		label = "direct receiver match"
 	case "name_match":
@@ -219,6 +228,38 @@ func describeDirectTestLink(kind, confidence string) string {
 		return label
 	}
 	return label + " (" + confidence + ")"
+}
+
+func describeCallRelation(dispatch string) string {
+	switch dispatch {
+	case "static":
+		return "static call edge from indexed call site"
+	case "method":
+		return "method call edge from indexed call site"
+	case "dynamic":
+		return "dynamic call edge from indexed call site"
+	case "":
+		return "call edge from indexed call site"
+	default:
+		return dispatch + " call edge from indexed call site"
+	}
+}
+
+func describeReferenceKind(kind string) string {
+	switch kind {
+	case "receiver":
+		return "receiver reference in indexed source"
+	case "type":
+		return "type reference in indexed source"
+	case "call":
+		return "call-site reference in indexed source"
+	case "use":
+		return "import or use reference in indexed source"
+	case "":
+		return "reference in indexed source"
+	default:
+		return kind + " reference in indexed source"
+	}
 }
 
 func packageSearchKindRank(kind string) int {

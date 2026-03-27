@@ -17,6 +17,7 @@ type shellSession struct {
 	store           *storage.Store
 	stdout          io.Writer
 	palette         palette
+	composition     projectComposition
 	changedNow      int
 	batPath         string
 	currentKey      string
@@ -77,6 +78,7 @@ func runShellREPL(command cli.Command, stdout io.Writer) error {
 		store:        state.Store,
 		stdout:       stdout,
 		palette:      newPalette(),
+		composition:  summarizeProjectComposition(state.Scanned),
 		changedNow:   changedNow,
 		batPath:      detectBatPath(),
 		historyIndex: -1,

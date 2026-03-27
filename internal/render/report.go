@@ -13,7 +13,7 @@ import (
 func Report(snapshot *model.Snapshot, projectTree *tree.Node, options config.Options) string {
 	var b strings.Builder
 
-	writeSummary(&b, snapshot)
+	writeSummary(&b, snapshot, options)
 	if options.SummaryOnly {
 		return b.String()
 	}
@@ -31,7 +31,7 @@ func Report(snapshot *model.Snapshot, projectTree *tree.Node, options config.Opt
 	return b.String()
 }
 
-func writeSummary(b *strings.Builder, snapshot *model.Snapshot) {
+func writeSummary(b *strings.Builder, snapshot *model.Snapshot, options config.Options) {
 	stats := snapshot.Stats
 
 	b.WriteString("CTX REPORT\n")
@@ -69,6 +69,35 @@ func writeSummary(b *strings.Builder, snapshot *model.Snapshot) {
 		b.WriteString("\nTop files by line count:\n")
 		for _, file := range stats.TopFiles {
 			b.WriteString(fmt.Sprintf("  - %s: %d lines, %s\n", file.Path, file.Lines, humanSize(file.SizeBytes)))
+		}
+	}
+
+	if options.Explain {
+		b.WriteString("\nExplainability:\n")
+		if options.ConfigPath != "" {
+			b.WriteString(fmt.Sprintf("  - config: %s\n", options.ConfigPath))
+		}
+		if options.ConfigProfile != "" {
+			b.WriteString(fmt.Sprintf("  - profile: %s\n", options.ConfigProfile))
+		}
+		b.WriteString(fmt.Sprintf("  - include hidden: %t\n", options.IncludeHidden))
+		b.WriteString(fmt.Sprintf("  - max file size: %d\n", options.MaxFileSize))
+		b.WriteString(fmt.Sprintf("  - keep empty: %t\n", options.KeepEmpty))
+		b.WriteString(fmt.Sprintf("  - include generated: %t\n", options.IncludeGenerated))
+		b.WriteString(fmt.Sprintf("  - include minified: %t\n", options.IncludeMinified))
+		b.WriteString(fmt.Sprintf("  - include artifacts: %t\n", options.IncludeArtifacts))
+		if len(options.Extensions) > 0 {
+			b.WriteString(fmt.Sprintf("  - extensions: %s\n", strings.Join(options.Extensions, ", ")))
+		}
+		if len(snapshot.Decisions) > 0 {
+			b.WriteString("\nDecision log:\n")
+			for _, decision := range snapshot.Decisions {
+				status := "skipped"
+				if decision.Included {
+					status = "included"
+				}
+				b.WriteString(fmt.Sprintf("  - [%s] %s (%s): %s\n", status, decision.Path, decision.Kind, decision.Reason))
+			}
 		}
 	}
 }

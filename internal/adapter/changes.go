@@ -14,7 +14,7 @@ func (a *Adapter) DetectChanges(info project.Info, scanned []codebase.ScanFile, 
 		}
 	}
 
-	plans := make([]codebase.ChangePlan, 0, 2)
+	plans := make([]codebase.ChangePlan, 0, 3)
 
 	goScanned := filterScannedFiles(scanned, isGoScanFile)
 	if hasGoProject(info.Root) || len(goScanned) > 0 || hasPreviousFiles(previous, isGoPreviousFile) {
@@ -24,6 +24,11 @@ func (a *Adapter) DetectChanges(info project.Info, scanned []codebase.ScanFile, 
 	pythonScanned := filterScannedFiles(scanned, isPythonScanFile)
 	if len(pythonScanned) > 0 || hasPreviousFiles(previous, isPythonPreviousFile) {
 		plans = append(plans, a.pythonAdapter.DetectChanges(info, pythonScanned, filterPreviousFiles(previous, isPythonPreviousFile)))
+	}
+
+	rustScanned := filterScannedFiles(scanned, isRustScanFile)
+	if len(rustScanned) > 0 || hasPreviousFiles(previous, isRustPreviousFile) {
+		plans = append(plans, a.rustAdapter.DetectChanges(info, rustScanned, filterPreviousFiles(previous, isRustPreviousFile)))
 	}
 
 	return codebase.MergeChangePlans(changes, plans...)

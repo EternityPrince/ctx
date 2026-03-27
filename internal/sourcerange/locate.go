@@ -1,22 +1,49 @@
-package app
+package sourcerange
 
 import (
 	"go/ast"
 	"go/parser"
 	"go/token"
 
+	pythonadapter "github.com/vladimirkasterin/ctx/internal/adapter/python"
+	rustadapter "github.com/vladimirkasterin/ctx/internal/adapter/rust"
 	"github.com/vladimirkasterin/ctx/internal/codebase"
-	"github.com/vladimirkasterin/ctx/internal/storage"
 )
 
-func locateSymbolRange(path string, data []byte, symbol storage.SymbolMatch) (int, int) {
-	if codebase.IsPythonFile(path) {
-		return locatePythonSymbolRange(path, symbol)
-	}
-	return locateGoSymbolRange(path, data, symbol)
+type Symbol struct {
+	Name     string
+	Kind     string
+	Receiver string
+	Line     int
 }
 
-func locateGoSymbolRange(path string, data []byte, symbol storage.SymbolMatch) (int, int) {
+func Locate(path string, data []byte, symbol Symbol) (int, int) {
+	if codebase.IsPythonFile(path) {
+		return locatePython(path, symbol)
+	}
+	if codebase.IsRustFile(path) {
+		return locateRust(data, symbol)
+	}
+	return locateGo(path, data, symbol)
+}
+
+func locatePython(path string, symbol Symbol) (int, int) {
+	start, end, err := pythonadapter.LocateSymbolBlock(path, symbol.Name, symbol.Kind, symbol.Receiver, symbol.Line)
+	if err != nil {
+		return 0, 0
+	}
+	return start, end
+}
+
+func locateRust(data []byte, symbol Symbol) (int, int) {
+	start, end, err := rustadapter.LocateSymbolBlock(data, symbol.Name, symbol.Kind, symbol.Receiver, symbol.Line)
+	if err != nil {
+		return 0, 0
+	}
+	return start, end
+}
+
+func locateGo(path string, data []byte, symbol Symbol) (int, int) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, data, parser.ParseComments)
 	if err != nil {

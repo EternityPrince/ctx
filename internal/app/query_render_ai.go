@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/vladimirkasterin/ctx/internal/storage"
 )
@@ -32,6 +33,41 @@ func renderAIRelatedSymbols(stdout io.Writer, modulePath, title string, values [
 				}
 			}
 		}
+		if value.Why != "" {
+			if _, err := fmt.Fprintf(stdout, " why=%q", value.Why); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(stdout); err != nil {
+			return err
+		}
+	}
+	return renderMoreLine(stdout, len(values), limit)
+}
+
+func renderAIRankedFiles(stdout io.Writer, title string, values []storage.RankedFile, limit int, explain bool) error {
+	if _, err := fmt.Fprintf(stdout, "%s=%d\n", title, len(values)); err != nil {
+		return err
+	}
+	for _, value := range values[:min(limit, len(values))] {
+		if _, err := fmt.Fprintf(
+			stdout,
+			"- file=%s calls=%d refs=%d tests=%d rdeps=%d relevant=%d score=%d",
+			value.Summary.FilePath,
+			value.Summary.InboundCallCount,
+			value.Summary.InboundReferenceCount,
+			value.Summary.RelatedTestCount,
+			value.Summary.ReversePackageDeps,
+			value.Summary.RelevantSymbolCount,
+			value.Score,
+		); err != nil {
+			return err
+		}
+		if explain {
+			if _, err := fmt.Fprintf(stdout, " why=%q", strings.Join(value.QualityWhy, " | ")); err != nil {
+				return err
+			}
+		}
 		if _, err := fmt.Fprintln(stdout); err != nil {
 			return err
 		}
@@ -46,7 +82,7 @@ func renderAIReferences(stdout io.Writer, modulePath, title string, values []sto
 	for _, value := range values[:min(limit, len(values))] {
 		if _, err := fmt.Fprintf(
 			stdout,
-			"- q=%s kind=%s sig=%q decl=%s:%d ref=%s:%d\n",
+			"- q=%s kind=%s sig=%q decl=%s:%d ref=%s:%d why=%q\n",
 			shortenQName(modulePath, value.Symbol.QName),
 			value.Kind,
 			displaySignature(value.Symbol),
@@ -54,6 +90,7 @@ func renderAIReferences(stdout io.Writer, modulePath, title string, values []sto
 			value.Symbol.Line,
 			value.UseFilePath,
 			value.UseLine,
+			value.Why,
 		); err != nil {
 			return err
 		}

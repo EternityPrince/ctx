@@ -87,6 +87,45 @@ func TestAnalyzeFiltersToPythonPackageInsideGoProject(t *testing.T) {
 	}
 }
 
+func TestAnalyzeIndexesRustSymbolsInsideGoProject(t *testing.T) {
+	root := t.TempDir()
+	writeAdapterFixture(t, root, "go.mod", "module example.com/mixed\n\ngo 1.26\n")
+	writeAdapterFixture(t, root, "main.go", "package main\n\nfunc main() {}\n")
+	writeAdapterFixture(t, root, "tools/rust-worker/Cargo.toml", "[package]\nname = \"worker\"\nedition = \"2021\"\n")
+	writeAdapterFixture(t, root, "tools/rust-worker/src/lib.rs", `pub struct Worker;
+
+impl Worker {
+    pub fn run(&self) {}
+}
+`)
+
+	info, err := project.Resolve(root)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if info.Language != "go" {
+		t.Fatalf("expected go project at repository root, got %q", info.Language)
+	}
+
+	adapter := NewAdapter()
+	scanned, err := adapter.Scan(root)
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	if !containsScanPath(scanned, "tools/rust-worker/src/lib.rs") {
+		t.Fatalf("expected rust file to be scanned, got %+v", scanned)
+	}
+
+	result, err := adapter.Analyze(info, codebase.ScanMap(scanned), nil)
+	if err != nil {
+		t.Fatalf("Analyze returned error: %v", err)
+	}
+
+	assertSymbolKind(t, result.Symbols, "example.com/mixed.main", "func")
+	assertSymbolKind(t, result.Symbols, "worker::Worker", "struct")
+	assertSymbolKind(t, result.Symbols, "worker::Worker::run", "method")
+}
+
 func requirePython3(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {

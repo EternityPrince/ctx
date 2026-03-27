@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vladimirkasterin/ctx/internal/config"
 )
@@ -17,6 +18,7 @@ type Command struct {
 	Query         string
 	Scope         string
 	Depth         int
+	Explain       bool
 	OutputMode    string
 	Limit         int
 	Note          string
@@ -28,6 +30,8 @@ type Command struct {
 	SnapshotID    int64
 	SnapshotIDs   []int64
 	SnapshotLimit int
+	WatchInterval time.Duration
+	WatchCycles   int
 	Report        config.Options
 }
 
@@ -56,8 +60,12 @@ func Parse(args []string) (Command, error) {
 		return parseRootCommand("update", args[1:])
 	case "shell":
 		return parseShell(args[1:])
+	case "watch":
+		return parseWatch(args[1:])
 	case "status":
 		return parseStatus(args[1:])
+	case "doctor":
+		return parseDoctor(args[1:])
 	case "symbol":
 		return parseSymbol(args[1:])
 	case "impact":
@@ -104,7 +112,9 @@ func parseRootCommand(name string, args []string) (Command, error) {
 	fs.SetOutput(ioDiscard{})
 
 	var note string
+	var explain bool
 	fs.StringVar(&note, "note", "", "optional snapshot note")
+	fs.BoolVar(&explain, "explain", false, "print incremental plan details")
 	fs.Usage = func() {}
 
 	if err := fs.Parse(args); err != nil {
@@ -128,6 +138,7 @@ func parseRootCommand(name string, args []string) (Command, error) {
 		Name:       name,
 		Root:       absRoot,
 		Note:       note,
+		Explain:    explain,
 		OutputMode: OutputHuman,
 	}, nil
 }
@@ -144,8 +155,10 @@ func parseStatus(args []string) (Command, error) {
 
 	var ai bool
 	var human bool
+	var explain bool
 	var projectArg string
 	fs.StringVar(&projectArg, "project", "", "indexed project id, prefix, module path, or root path")
+	fs.BoolVar(&explain, "explain", false, "print why files/packages are currently marked as changed")
 	bindOutputModeFlags(fs, &ai, &human)
 	fs.Usage = func() {}
 
@@ -175,7 +188,40 @@ func parseStatus(args []string) (Command, error) {
 		Name:       "status",
 		Root:       absRoot,
 		ProjectArg: projectArg,
+		Explain:    explain,
 		OutputMode: mode,
+	}, nil
+}
+
+func parseDoctor(args []string) (Command, error) {
+	root := "."
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		root = args[0]
+		args = args[1:]
+	}
+
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(ioDiscard{})
+	fs.Usage = func() {}
+	if err := fs.Parse(args); err != nil {
+		return Command{}, usageError(err)
+	}
+	remaining := fs.Args()
+	if len(remaining) > 1 {
+		return Command{}, usageError(errors.New("only one path can be provided"))
+	}
+	if len(remaining) == 1 {
+		root = remaining[0]
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return Command{}, fmt.Errorf("resolve root path: %w", err)
+	}
+	return Command{
+		Name:       "doctor",
+		Root:       absRoot,
+		OutputMode: OutputHuman,
 	}, nil
 }
 
@@ -324,6 +370,57 @@ func parseShell(args []string) (Command, error) {
 	}, nil
 }
 
+func parseWatch(args []string) (Command, error) {
+	root := "."
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		root = args[0]
+		args = args[1:]
+	}
+
+	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
+	fs.SetOutput(ioDiscard{})
+
+	var interval time.Duration
+	var cycles int
+	var explain bool
+	fs.DurationVar(&interval, "interval", 2*time.Second, "poll interval between watch cycles")
+	fs.IntVar(&cycles, "cycles", 0, "number of watch cycles to run before exiting (0 means run until interrupted)")
+	fs.BoolVar(&explain, "explain", false, "print incremental plan details when watch applies an update")
+	fs.Usage = func() {}
+
+	if err := fs.Parse(args); err != nil {
+		return Command{}, usageError(err)
+	}
+
+	remaining := fs.Args()
+	if len(remaining) > 1 {
+		return Command{}, usageError(errors.New("only one path can be provided"))
+	}
+	if len(remaining) == 1 {
+		root = remaining[0]
+	}
+	if interval <= 0 {
+		return Command{}, usageError(errors.New("watch interval must be greater than zero"))
+	}
+	if cycles < 0 {
+		return Command{}, usageError(errors.New("watch cycles cannot be negative"))
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return Command{}, fmt.Errorf("resolve root path: %w", err)
+	}
+
+	return Command{
+		Name:          "watch",
+		Root:          absRoot,
+		Explain:       explain,
+		OutputMode:    OutputHuman,
+		WatchInterval: interval,
+		WatchCycles:   cycles,
+	}, nil
+}
+
 func parseReport(args []string) (Command, error) {
 	if shouldUseLegacyReport(args) {
 		report, err := parseLegacyReport(stripLegacyReportFlags(args))
@@ -357,8 +454,10 @@ func parseReport(args []string) (Command, error) {
 	var human bool
 	var limit int
 	var rootFlag string
+	var explain bool
 	fs.StringVar(&rootFlag, "root", root, "project root or any path inside the project")
 	fs.IntVar(&limit, "limit", 8, "number of entries per summary section")
+	fs.BoolVar(&explain, "explain", false, "show provenance behind ranked packages, symbols, and tests")
 	bindOutputModeFlags(fs, &ai, &human)
 	fs.Usage = func() {}
 
@@ -395,6 +494,7 @@ func parseReport(args []string) (Command, error) {
 		Name:       "report",
 		Root:       absRoot,
 		Scope:      scope,
+		Explain:    explain,
 		OutputMode: mode,
 		Limit:      limit,
 	}, nil
@@ -810,9 +910,14 @@ func parseLegacyReport(args []string) (config.Options, error) {
 	fs.SetOutput(ioDiscard{})
 
 	fs.BoolVar(&options.IncludeHidden, "hidden", false, "include hidden files and directories")
-	fs.Int64Var(&options.MaxFileSize, "max-file-size", 2*1024*1024, "maximum file size in bytes (0 disables the limit)")
+	fs.Int64Var(&options.MaxFileSize, "max-file-size", -1, "maximum file size in bytes (0 disables the limit)")
 	fs.StringVar(&options.OutputPath, "output", "", "write report to a file instead of stdout")
 	fs.BoolVar(&options.CopyToClipboard, "copy", false, "copy report to the macOS clipboard")
+	fs.BoolVar(&options.Explain, "explain", false, "include effective filters and file decision reasons")
+	fs.BoolVar(&options.KeepEmpty, "keep-empty", false, "keep empty and whitespace-only files in dump output")
+	fs.BoolVar(&options.IncludeGenerated, "include-generated", false, "include generated files that dump skips by default")
+	fs.BoolVar(&options.IncludeMinified, "include-minified", false, "include minified bundle-like files that dump skips by default")
+	fs.BoolVar(&options.IncludeArtifacts, "include-artifacts", false, "include low-value artifacts like .gitkeep, *.log, and *.tmp")
 	fs.StringVar(&options.ExtensionsRaw, "extensions", "", "comma-separated list of file extensions to include")
 	fs.BoolVar(&options.SummaryOnly, "summary-only", false, "print only summary statistics")
 	fs.BoolVar(&options.NoTree, "no-tree", false, "skip directory tree output")
@@ -843,7 +948,22 @@ func parseLegacyReport(args []string) (config.Options, error) {
 	}
 
 	options.Root = absRoot
-	options.Extensions = normalizeExtensions(options.ExtensionsRaw)
+	options.ConfigProfile = "dump"
+	cliExtensions := normalizeExtensions(options.ExtensionsRaw)
+	cfg, err := config.LoadProject(absRoot)
+	if err != nil {
+		return config.Options{}, err
+	}
+	options = config.ApplyProfile(options, cfg, "dump")
+	if config.HasConfigFile(cfg) {
+		options.ConfigPath = cfg.Path
+	}
+	if len(cliExtensions) > 0 {
+		options.Extensions = cliExtensions
+	}
+	if options.MaxFileSize < 0 {
+		options.MaxFileSize = 2 * 1024 * 1024
+	}
 
 	return options, nil
 }
@@ -857,7 +977,7 @@ func (ioDiscard) Write(p []byte) (int, error) {
 const usageMessage = `ctx: local Go and Python code intelligence for exploring a project as a system.
 
 Philosophy:
-  Give ctx a Go codebase, a Python codebase, or a mixed repository and it helps you read it in flow:
+  Give ctx a Go codebase, a Python codebase, a Rust codebase, or a mixed repository and it helps you read it in flow:
   find a function, class, or method, understand its contract, inspect its callers and callees,
   see where it lives, what depends on it, which tests are nearby, and move on.
 
@@ -871,6 +991,7 @@ Quick Start:
   ctx impact CreateSession    estimate blast radius
   ctx report .                get a project map
   ctx shell                   enter the exploration shell
+  ctx watch .                 keep snapshots fresh in the background
   ctx history CreateSession   inspect symbol or package change history
   ctx cochange CreateSession  find files and packages that change with it
 
@@ -884,8 +1005,9 @@ Usage:
   ctx dump [path] [legacy report flags]
   ctx index [path] [--note text]
   ctx update [path] [--note text]
-  ctx status [path] [-h|-human|-a|-ai]
-  ctx report [project|risky|seams|hotspots|low-tested|changed-since] [path] [-h|-human|-a|-ai] [-limit N]
+  ctx status [path] [--explain] [-h|-human|-a|-ai]
+  ctx doctor [path]
+  ctx report [project|risky|seams|hotspots|low-tested|changed-since] [path] [--explain] [-h|-human|-a|-ai] [-limit N]
   ctx symbol <query> [--root path] [-h|-human|-a|-ai]
   ctx impact <query> [--root path] [--depth N] [-h|-human|-a|-ai]
   ctx history <query> [--root path] [--package|--symbol] [--limit N]
@@ -897,14 +1019,17 @@ Usage:
   ctx snapshots limit <n> [--root path|--project id]
   ctx snapshot [id] [--root path] [-h|-human|-a|-ai]
   ctx shell [query] [--root path]
+  ctx watch [path] [--interval 2s] [--cycles N] [--explain]
   ctx projects [list|rm|prune|status]
   ctx projects snapshots <project> [list|rm|limit] ...
 
 Core Commands:
-  index      create or rebuild a snapshot-backed index for the current Go, Python, or mixed project
+  index      create or rebuild a snapshot-backed index for the current Go, Python, Rust, or mixed project
   update     incrementally refresh the index after local code changes
-  status     show snapshot freshness, inventory, and current index state
-  report     summarize the project or deterministic slices like risky/seams/hotspots/low-tested/changed-since
+  watch      keep the snapshot fresh by polling for local changes and applying incremental updates
+  status     show snapshot freshness, inventory, and latest index timing telemetry
+  doctor     inspect project detection, config, schema/storage health, and incremental readiness diagnostics
+  report     summarize the project or deterministic slices like risky/seams/hotspots/low-tested/changed-since, with optional provenance
   symbol     show declaration, signature, context, refs, callers, callees, tests, impact
   impact     show what may be affected if a symbol changes
   history    trace when a symbol or package was introduced and how it changed across snapshots
@@ -937,6 +1062,10 @@ Shell Flow:
 
 Runtime Notes:
   Python analysis requires python3 on PATH.
+  Rust analysis is local and practical-first: files/packages/tests plus best-effort symbols today, not a full typed semantic graph yet.
+  Incremental invalidation is language-aware: lockfiles and some metadata changes no longer force full reindex when the local indexed graph is unchanged.
+  watch prefers native filesystem events on macOS and falls back to polling elsewhere or when native setup fails.
+  .ctxconfig can supply global or profile-specific settings for dump/index/report and path include/exclude rules.
   search and grep operate on indexed files from the current snapshot.
 
 Install:
@@ -950,6 +1079,11 @@ Legacy dump flags:
   -max-file-size     maximum file size in bytes (default 2097152)
   -output            write report to a file
   -copy              copy report to the macOS clipboard
+  -explain           include effective filters and file decision reasons
+  -keep-empty        include empty and whitespace-only files
+  -include-generated include generated files
+  -include-minified  include minified bundle-like files
+  -include-artifacts include low-value artifacts like .gitkeep, *.log, and *.tmp
   -extensions        comma-separated extension filter, for example go,md,yaml
   -summary-only      print only summary statistics
   -no-tree           skip directory tree output
@@ -989,7 +1123,7 @@ func normalizeExtensions(raw string) []string {
 
 func shouldTreatAsLegacyReport(firstArg string) bool {
 	switch firstArg {
-	case "index", "update", "shell", "status", "symbol", "impact", "history", "cochange", "diff", "snapshots", "snapshot", "projects", "report", "dump", "help", "-h", "--help":
+	case "index", "update", "shell", "watch", "status", "symbol", "impact", "history", "cochange", "diff", "snapshots", "snapshot", "projects", "report", "dump", "help", "-h", "--help":
 		return false
 	}
 	if strings.HasPrefix(firstArg, "-") {
@@ -1018,7 +1152,7 @@ func resolveOutputMode(ai, human bool) (string, error) {
 func shouldUseLegacyReport(args []string) bool {
 	for _, arg := range args {
 		switch arg {
-		case "-legacy", "--legacy", "-hidden", "-max-file-size", "-output", "-copy", "-extensions", "-summary-only", "-no-tree", "-no-contents":
+		case "-legacy", "--legacy", "-hidden", "-max-file-size", "-output", "-copy", "-keep-empty", "-include-generated", "-include-minified", "-include-artifacts", "-extensions", "-summary-only", "-no-tree", "-no-contents":
 			return true
 		}
 	}

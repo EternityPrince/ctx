@@ -8,7 +8,7 @@ import (
 	"github.com/vladimirkasterin/ctx/internal/storage"
 )
 
-func renderHumanPackages(stdout io.Writer, p palette, modulePath, title string, values []storage.RankedPackage) error {
+func renderHumanPackages(stdout io.Writer, p palette, modulePath, title string, values []storage.RankedPackage, explain bool) error {
 	if _, err := fmt.Fprintf(stdout, "%s\n", p.section(title)); err != nil {
 		return err
 	}
@@ -33,12 +33,22 @@ func renderHumanPackages(stdout io.Writer, p palette, modulePath, title string, 
 		); err != nil {
 			return err
 		}
+		if explain {
+			for _, why := range value.QualityWhy {
+				if _, err := fmt.Fprintf(stdout, "    %s %s\n", p.label("quality:"), why); err != nil {
+					return err
+				}
+			}
+			if err := renderHumanProvenance(stdout, p, modulePath, value.Provenance); err != nil {
+				return err
+			}
+		}
 	}
 	_, err := fmt.Fprintln(stdout)
 	return err
 }
 
-func renderHumanRankedSymbols(stdout io.Writer, p palette, modulePath, title string, values []storage.RankedSymbol) error {
+func renderHumanRankedSymbols(stdout io.Writer, p palette, modulePath, title string, values []storage.RankedSymbol, explain bool) error {
 	if _, err := fmt.Fprintf(stdout, "%s\n", p.section(title)); err != nil {
 		return err
 	}
@@ -68,6 +78,57 @@ func renderHumanRankedSymbols(stdout io.Writer, p palette, modulePath, title str
 			rankedSymbolRiskSummary(value),
 		); err != nil {
 			return err
+		}
+		if explain {
+			for _, why := range value.QualityWhy {
+				if _, err := fmt.Fprintf(stdout, "    %s %s\n", p.label("quality:"), why); err != nil {
+					return err
+				}
+			}
+			if err := renderHumanProvenance(stdout, p, modulePath, value.Provenance); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := fmt.Fprintln(stdout)
+	return err
+}
+
+func renderHumanRankedFiles(stdout io.Writer, p palette, title string, values []storage.RankedFile, explain bool) error {
+	if _, err := fmt.Fprintf(stdout, "%s\n", p.section(title)); err != nil {
+		return err
+	}
+	if len(values) == 0 {
+		return renderHumanEmpty(stdout, p)
+	}
+	for _, value := range values {
+		symbols := strings.Join(limitStrings(value.TopSymbols, 4), ", ")
+		if symbols == "" {
+			symbols = "none"
+		}
+		if _, err := fmt.Fprintf(
+			stdout,
+			"  %s %s\n    %s calls=%d refs=%d tests=%d rdeps=%d relevant=%d score=%d\n    %s symbols=%s\n",
+			p.badge(reportImportance(value.Score)),
+			value.Summary.FilePath,
+			p.label("metrics:"),
+			value.Summary.InboundCallCount,
+			value.Summary.InboundReferenceCount,
+			value.Summary.RelatedTestCount,
+			value.Summary.ReversePackageDeps,
+			value.Summary.RelevantSymbolCount,
+			value.Score,
+			p.label("surface:"),
+			symbols,
+		); err != nil {
+			return err
+		}
+		if explain {
+			for _, why := range value.QualityWhy {
+				if _, err := fmt.Fprintf(stdout, "    %s %s\n", p.label("why:"), why); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	_, err := fmt.Fprintln(stdout)
@@ -187,6 +248,11 @@ func renderHumanRelatedSymbols(stdout io.Writer, p palette, projectRoot, moduleP
 					return err
 				}
 			}
+			if value.Why != "" {
+				if _, err := fmt.Fprintf(stdout, "    %s %s\n", p.label("why:"), value.Why); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return renderMoreLine(stdout, len(values), limit)
@@ -211,6 +277,11 @@ func renderHumanReferences(stdout io.Writer, p palette, projectRoot, modulePath,
 		}
 		if _, err := fmt.Fprintf(stdout, "    %s %s:%d [%s]\n", p.label("ref:"), value.UseFilePath, value.UseLine, value.Kind); err != nil {
 			return err
+		}
+		if value.Why != "" {
+			if _, err := fmt.Fprintf(stdout, "    %s %s\n", p.label("why:"), value.Why); err != nil {
+				return err
+			}
 		}
 		if snippet := sourceLineSnippet(projectRoot, value.UseFilePath, value.UseLine); snippet != "" {
 			if _, err := fmt.Fprintf(stdout, "    %s %s\n", p.label("context:"), snippet); err != nil {
@@ -268,6 +339,33 @@ func renderHumanTestGuidance(stdout io.Writer, p palette, projectRoot string, gu
 		return err
 	}
 	return renderHumanTests(stdout, p, projectRoot, "Tests To Read Before Change", guidance.ReadBefore, limit)
+}
+
+func renderHumanProvenance(stdout io.Writer, p palette, modulePath string, items []storage.ProvenanceItem) error {
+	for _, item := range items {
+		label := item.Label
+		switch item.Kind {
+		case "call", "ref", "method", "symbol", "reverse_dep":
+			label = shortenQName(modulePath, item.Label)
+		}
+		if _, err := fmt.Fprintf(stdout, "    %s %s", p.label("why:"), item.Why); err != nil {
+			return err
+		}
+		if label != "" {
+			if _, err := fmt.Fprintf(stdout, " -> %s", label); err != nil {
+				return err
+			}
+		}
+		if item.FilePath != "" && item.Line > 0 {
+			if _, err := fmt.Fprintf(stdout, " @ %s:%d", item.FilePath, item.Line); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(stdout); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func renderHumanSiblingSymbols(stdout io.Writer, p palette, projectRoot, modulePath, title string, symbols []storage.SymbolMatch, limit int) error {

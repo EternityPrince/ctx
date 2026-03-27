@@ -15,15 +15,30 @@ import (
 
 func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 	files := make([]codebase.ScanFile, 0, 128)
+	walker, err := filter.NewWalker(root, false, "index")
+	if err != nil {
+		return nil, err
+	}
 
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return filter.HandleWalkError(path, walkErr)
 		}
 
+		relPath := ""
+		if path != root {
+			value, err := filepath.Rel(root, path)
+			if err != nil {
+				return fmt.Errorf("make relative path: %w", err)
+			}
+			relPath = filepath.ToSlash(value)
+		}
+
 		if entry.IsDir() {
 			if path != root {
-				if skip, _ := filter.SkipDirectory(path, entry.Name(), false); skip {
+				if skip, _, err := walker.ShouldSkipDirectory(path, relPath, entry.Name()); err != nil {
+					return err
+				} else if skip {
 					return filepath.SkipDir
 				}
 			}
@@ -31,17 +46,16 @@ func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 		}
 
 		name := entry.Name()
+		if skip, _, err := walker.ShouldSkipFile(path, relPath, name); err != nil {
+			return err
+		} else if skip {
+			return nil
+		}
 		isPython := codebase.IsPythonFile(name)
 		isModule := codebase.IsPythonProjectFile(name)
 		if !isPython && !isModule {
 			return nil
 		}
-
-		relPath, err := filepath.Rel(root, path)
-		if err != nil {
-			return fmt.Errorf("make relative path: %w", err)
-		}
-		relPath = filepath.ToSlash(relPath)
 
 		data, err := os.ReadFile(path)
 		if err != nil {

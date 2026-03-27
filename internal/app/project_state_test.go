@@ -55,6 +55,46 @@ func TestOpenPreparedProjectStateAutoRefreshesPythonChangesInMixedProject(t *tes
 	assertStoredSymbol(t, symbols, "pkg.service.normalize", "func")
 }
 
+func TestOpenPreparedProjectStateAutoRefreshesRustChanges(t *testing.T) {
+	t.Setenv("CTX_HOME", t.TempDir())
+
+	root := t.TempDir()
+	writeProjectStateFixture(t, root, "Cargo.toml", "[package]\nname = \"demo\"\nedition = \"2021\"\n")
+	writeProjectStateFixture(t, root, "src/lib.rs", "pub fn run() {}\n")
+
+	state, err := openProjectState(root)
+	if err != nil {
+		t.Fatalf("openProjectState returned error: %v", err)
+	}
+	if _, committed, err := projectService.ApplySnapshot(state, "index", "initial", false); err != nil {
+		_ = state.Close()
+		t.Fatalf("ApplySnapshot returned error: %v", err)
+	} else if !committed {
+		_ = state.Close()
+		t.Fatal("expected initial snapshot to be committed")
+	}
+	if err := state.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	writeProjectStateFixture(t, root, "src/lib.rs", "pub fn run() {\n    helper();\n}\n\nfn helper() {}\n")
+
+	refreshed, err := openPreparedProjectState(cli.Command{Name: "shell", Root: root})
+	if err != nil {
+		t.Fatalf("openPreparedProjectState returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = refreshed.Close()
+	})
+
+	symbols, err := refreshed.Store.LoadFileSymbols("src/lib.rs")
+	if err != nil {
+		t.Fatalf("LoadFileSymbols returned error: %v", err)
+	}
+	assertStoredSymbol(t, symbols, "demo::run", "func")
+	assertStoredSymbol(t, symbols, "demo::helper", "func")
+}
+
 func writeProjectStateFixture(t *testing.T, root, relPath, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(relPath))

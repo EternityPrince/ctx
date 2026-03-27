@@ -25,8 +25,12 @@ func Collect(options config.Options) (*model.Snapshot, error) {
 	extensionFilter := makeExtensionFilter(options.Extensions)
 	extensionStats := make(map[string]*model.ExtensionMetric)
 	skipReasons := make(map[string]int)
+	walker, err := filter.NewWalker(options.Root, options.IncludeHidden, "dump")
+	if err != nil {
+		return nil, err
+	}
 
-	err := filepath.WalkDir(options.Root, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(options.Root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return filter.HandleWalkError(path, walkErr)
 		}
@@ -44,9 +48,12 @@ func Collect(options config.Options) (*model.Snapshot, error) {
 		name := entry.Name()
 		if entry.IsDir() {
 			snapshot.Stats.DirectoriesScanned++
-			if skip, reason := filter.SkipDirectory(path, name, options.IncludeHidden); skip {
+			if skip, reason, err := walker.ShouldSkipDirectory(path, relPath, name); err != nil {
+				return err
+			} else if skip {
 				snapshot.Stats.DirectoriesSkipped++
 				skipReasons[reason]++
+				addDecision(snapshot, options.Explain, filepath.ToSlash(relPath), "dir", false, reason)
 				return filepath.SkipDir
 			}
 			snapshot.Directories = append(snapshot.Directories, filepath.ToSlash(relPath))
@@ -55,8 +62,11 @@ func Collect(options config.Options) (*model.Snapshot, error) {
 
 		snapshot.Stats.FilesScanned++
 
-		if skip, reason := filter.SkipFile(name, options.IncludeHidden); skip {
+		if skip, reason, err := walker.ShouldSkipFile(path, relPath, name); err != nil {
+			return err
+		} else if skip {
 			skipReasons[reason]++
+			addDecision(snapshot, options.Explain, filepath.ToSlash(relPath), "file", false, reason)
 			return nil
 		}
 
@@ -67,12 +77,19 @@ func Collect(options config.Options) (*model.Snapshot, error) {
 
 		if options.MaxFileSize > 0 && info.Size() > options.MaxFileSize {
 			skipReasons["file exceeds size limit"]++
+			addDecision(snapshot, options.Explain, filepath.ToSlash(relPath), "file", false, "file exceeds size limit")
 			return nil
 		}
 
 		extension := strings.ToLower(filepath.Ext(name))
 		if !extensionFilter.match(extension) {
 			skipReasons["filtered by extension"]++
+			addDecision(snapshot, options.Explain, filepath.ToSlash(relPath), "file", false, "filtered by extension")
+			return nil
+		}
+		if !options.IncludeArtifacts && filter.IsLowValueArtifact(name) {
+			skipReasons["low-value artifact"]++
+			addDecision(snapshot, options.Explain, filepath.ToSlash(relPath), "file", false, "low-value artifact")
 			return nil
 		}
 
@@ -83,11 +100,27 @@ func Collect(options config.Options) (*model.Snapshot, error) {
 
 		if filter.IsLikelyBinary(data) {
 			skipReasons["binary file"]++
+			addDecision(snapshot, options.Explain, filepath.ToSlash(relPath), "file", false, "binary file")
 			return nil
 		}
 
 		content := text.NormalizeNewlines(string(data))
 		totalLines, nonEmptyLines := text.CountLines(content)
+		if !options.KeepEmpty && nonEmptyLines == 0 {
+			skipReasons["empty file"]++
+			addDecision(snapshot, options.Explain, filepath.ToSlash(relPath), "file", false, "empty file")
+			return nil
+		}
+		if !options.IncludeGenerated && filter.IsGeneratedText(content) {
+			skipReasons["generated file"]++
+			addDecision(snapshot, options.Explain, filepath.ToSlash(relPath), "file", false, "generated file")
+			return nil
+		}
+		if !options.IncludeMinified && filter.IsMinifiedText(name, content, totalLines) {
+			skipReasons["minified file"]++
+			addDecision(snapshot, options.Explain, filepath.ToSlash(relPath), "file", false, "minified file")
+			return nil
+		}
 
 		file := model.File{
 			Name:          name,
@@ -102,6 +135,7 @@ func Collect(options config.Options) (*model.Snapshot, error) {
 
 		snapshot.Files = append(snapshot.Files, file)
 		accumulateStats(&snapshot.Stats, extensionStats, file)
+		addDecision(snapshot, options.Explain, file.RelativePath, "file", true, "passed filters")
 		return nil
 	})
 	if err != nil {
@@ -116,6 +150,18 @@ func Collect(options config.Options) (*model.Snapshot, error) {
 	finalizeStats(&snapshot.Stats, extensionStats, skipReasons)
 
 	return snapshot, nil
+}
+
+func addDecision(snapshot *model.Snapshot, enabled bool, path, kind string, included bool, reason string) {
+	if !enabled || snapshot == nil {
+		return
+	}
+	snapshot.Decisions = append(snapshot.Decisions, model.Decision{
+		Path:     path,
+		Kind:     kind,
+		Included: included,
+		Reason:   reason,
+	})
 }
 
 type extensionFilter struct {

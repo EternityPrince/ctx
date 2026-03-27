@@ -2,10 +2,23 @@
 
 ## What languages does `ctx` support?
 
-`ctx` supports Go, Python, and mixed Go + Python repositories.
+`ctx` supports Go, Python, Rust, and mixed repositories that combine them.
 
 For Go it builds a typed project graph from the local repository.
 For Python it uses a local AST-based analyzer to expose files, functions, classes, methods, imports, tests, and common call relationships.
+For Rust it currently focuses on practical repository support: Cargo project/workspace detection, file/package indexing, mixed-repo support, tests, and best-effort symbol extraction.
+
+## Does Rust support match Go exactly?
+
+Not yet.
+
+Rust support is intentionally practical before it is complete:
+
+- project detection works for crates and Cargo workspaces
+- `ctx dump`, `ctx report`, `ctx shell`, `ctx index`, `ctx update`, and `ctx status` work on Rust repositories
+- files, packages, incremental updates, and common symbols/tests are indexed locally
+
+What Rust does not claim yet is full typed semantic parity with Go. In particular, calls, refs, trait-driven dispatch, macro-heavy code, and some inline test/module patterns are still best-effort.
 
 ## Does Python support match Go exactly?
 
@@ -42,6 +55,23 @@ If you see missing edges in one of those cases, that is a current analyzer limit
 They intentionally search the current snapshot instead of every file on disk.
 
 That keeps the shell fast, deterministic, and aligned with the indexed project graph. It also avoids showing results from files that the current snapshot does not know how to navigate yet.
+
+## How do ignore files affect `dump`, `index`, and tree views?
+
+`ctx` now respects `.gitignore` and `.ctxignore` across legacy dump collection, project indexing scans, and shell tree walks.
+
+Use `.ctxignore` when you want `ctx`-specific cleanup without changing repository-wide git behavior. If the same path is ignored by git but re-included in `.ctxignore`, the `ctx` rule wins.
+
+For `ctx dump`, the collector also skips empty files, generated files, obvious minified bundles, and low-value artifacts by default. You can override that with:
+
+- `-keep-empty`
+- `-include-generated`
+- `-include-minified`
+- `-include-artifacts`
+
+For indexed project summaries, `ctx report --explain` now shows provenance for ranked packages and symbols, plus the strongest indexed callers, references, tests, and reverse dependencies behind those rankings.
+
+`ctx report` and shell hot-file views also use a shared quality model now: graph signals are blended with recent change proximity and entrypoint heuristics, so important entry files and freshly touched seams surface earlier.
 
 ## How do I navigate huge repositories without paging through dozens of tree screens?
 

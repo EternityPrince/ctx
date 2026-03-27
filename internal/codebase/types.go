@@ -8,18 +8,22 @@ import (
 )
 
 type ScanFile struct {
-	AbsPath   string
-	RelPath   string
-	Hash      string
-	SizeBytes int64
-	IsGo      bool
-	IsTest    bool
-	IsModule  bool
+	AbsPath           string
+	RelPath           string
+	PackageImportPath string
+	Identity          string
+	Hash              string
+	SizeBytes         int64
+	IsGo              bool
+	IsRust            bool
+	IsTest            bool
+	IsModule          bool
 }
 
 type PreviousFile struct {
 	RelPath           string
 	PackageImportPath string
+	Identity          string
 	Hash              string
 	IsTest            bool
 }
@@ -34,6 +38,9 @@ type ChangePlan struct {
 	Changes          ChangeSet
 	ImpactedPackages []string
 	FullReindex      bool
+	Reason           string
+	Fingerprint      string
+	CacheHit         bool
 }
 
 func (c ChangeSet) Count() int {
@@ -86,6 +93,13 @@ func PackageImportPath(modulePath, relPath string) string {
 		return modulePath
 	}
 	return modulePath + "/" + filepath.ToSlash(dir)
+}
+
+func ScanPackageImportPath(modulePath string, file ScanFile) string {
+	if strings.TrimSpace(file.PackageImportPath) != "" {
+		return strings.TrimSpace(file.PackageImportPath)
+	}
+	return PackageImportPath(modulePath, file.RelPath)
 }
 
 func PythonPackageImportPath(modulePath, relPath string) string {

@@ -21,6 +21,8 @@ func TestFileKindHelpersRecognizePythonAndGoTests(t *testing.T) {
 		goTest      bool
 		pythonFile  bool
 		pythonTest  bool
+		rustFile    bool
+		rustTest    bool
 		indexedFile bool
 	}{
 		{path: "pkg/service.go", goFile: true, indexedFile: true},
@@ -28,6 +30,8 @@ func TestFileKindHelpersRecognizePythonAndGoTests(t *testing.T) {
 		{path: "pkg/service.py", pythonFile: true, indexedFile: true},
 		{path: "tests/test_service.py", pythonFile: true, pythonTest: true, indexedFile: true},
 		{path: "pkg/conftest.py", pythonFile: true, pythonTest: true, indexedFile: true},
+		{path: "src/lib.rs", rustFile: true, indexedFile: true},
+		{path: "tests/integration.rs", rustFile: true, rustTest: true, indexedFile: true},
 		{path: "README.md"},
 	}
 
@@ -43,6 +47,12 @@ func TestFileKindHelpersRecognizePythonAndGoTests(t *testing.T) {
 		}
 		if got := IsPythonTestFile(tc.path); got != tc.pythonTest {
 			t.Fatalf("IsPythonTestFile(%q) = %v, want %v", tc.path, got, tc.pythonTest)
+		}
+		if got := IsRustFile(tc.path); got != tc.rustFile {
+			t.Fatalf("IsRustFile(%q) = %v, want %v", tc.path, got, tc.rustFile)
+		}
+		if got := IsRustTestFile(tc.path); got != tc.rustTest {
+			t.Fatalf("IsRustTestFile(%q) = %v, want %v", tc.path, got, tc.rustTest)
 		}
 		if got := IsIndexedSourceFile(tc.path); got != tc.indexedFile {
 			t.Fatalf("IsIndexedSourceFile(%q) = %v, want %v", tc.path, got, tc.indexedFile)
@@ -69,5 +79,16 @@ func TestIsPythonProjectFile(t *testing.T) {
 	}
 	if IsPythonProjectFile("go.mod") {
 		t.Fatal("did not expect go.mod to be recognized as python project file")
+	}
+}
+
+func TestIsRustProjectFile(t *testing.T) {
+	for _, name := range []string{"Cargo.toml", "Cargo.lock"} {
+		if !IsRustProjectFile(name) {
+			t.Fatalf("expected %q to be recognized as rust project file", name)
+		}
+	}
+	if IsRustProjectFile("pyproject.toml") {
+		t.Fatal("did not expect pyproject.toml to be recognized as rust project file")
 	}
 }

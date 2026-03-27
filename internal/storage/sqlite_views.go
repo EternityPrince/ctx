@@ -231,6 +231,11 @@ func (s *Store) LoadSymbolView(symbolKey string) (SymbolView, error) {
 	if view.Siblings, err = s.loadSiblings(current.ID, view.Symbol); err != nil {
 		return SymbolView{}, err
 	}
+	ctx, err := s.loadQualityContext(current)
+	if err != nil {
+		return SymbolView{}, err
+	}
+	view.QualityScore, view.QualityWhy = qualityForSymbolView(view, ctx)
 
 	return view, nil
 }
@@ -389,6 +394,7 @@ func (s *Store) loadReferences(snapshotID int64, symbolKey string, inbound bool)
 		); err != nil {
 			return nil, fmt.Errorf("scan ref: %w", err)
 		}
+		ref.Why = describeReferenceKind(ref.Kind)
 		refs = append(refs, ref)
 	}
 	if err := rows.Err(); err != nil {
@@ -405,7 +411,7 @@ func (s *Store) loadTests(snapshotID int64, symbolKey string) ([]TestView, error
 		WHERE tl.snapshot_id = ? AND tl.symbol_key = ?
 		ORDER BY
 			CASE tl.confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
-			CASE tl.link_kind WHEN 'receiver_match' THEN 3 WHEN 'name_match' THEN 2 WHEN 'global_name_match' THEN 1 ELSE 0 END DESC,
+			CASE tl.link_kind WHEN 'direct' THEN 3 WHEN 'receiver_match' THEN 3 WHEN 'related' THEN 2 WHEN 'name_match' THEN 2 WHEN 'global_name_match' THEN 1 ELSE 0 END DESC,
 			t.file_path,
 			t.line,
 			t.name

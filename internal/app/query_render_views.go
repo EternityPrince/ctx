@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/vladimirkasterin/ctx/internal/storage"
 )
@@ -25,6 +26,11 @@ func renderHumanSymbolView(stdout io.Writer, projectRoot, modulePath string, vie
 
 	if err := renderHumanDeclaration(stdout, p, projectRoot, view.Symbol); err != nil {
 		return err
+	}
+	if len(view.QualityWhy) > 0 {
+		if _, err := fmt.Fprintf(stdout, "%s\n  %s %d\n  %s %s\n\n", p.section("Quality"), p.label("Score:"), view.QualityScore, p.label("Why:"), strings.Join(view.QualityWhy, "; ")); err != nil {
+			return err
+		}
 	}
 	if err := renderHumanSource(stdout, p, projectRoot, view.Symbol.FilePath, view.Symbol.Line); err != nil {
 		return err
@@ -65,13 +71,14 @@ func renderHumanSymbolView(stdout io.Writer, projectRoot, modulePath string, vie
 func renderAISymbolView(stdout io.Writer, modulePath string, view storage.SymbolView, guidance symbolTestGuidance) error {
 	if _, err := fmt.Fprintf(
 		stdout,
-		"symbol q=%s kind=%s file=%s:%d package=%s impact=%s callers=%d refs_in=%d refs_out=%d tests=%d rdeps=%d test_signal=%q\n",
+		"symbol q=%s kind=%s file=%s:%d package=%s impact=%s quality_score=%d callers=%d refs_in=%d refs_out=%d tests=%d rdeps=%d test_signal=%q\n",
 		shortenQName(modulePath, view.Symbol.QName),
 		view.Symbol.Kind,
 		view.Symbol.FilePath,
 		view.Symbol.Line,
 		shortenQName(modulePath, view.Symbol.PackageImportPath),
 		impactLabel(len(view.Callers), len(view.ReferencesIn), len(view.Tests), len(view.Package.ReverseDeps)),
+		view.QualityScore,
 		len(view.Callers),
 		len(view.ReferencesIn),
 		len(view.ReferencesOut),
@@ -91,6 +98,11 @@ func renderAISymbolView(stdout io.Writer, modulePath string, view storage.Symbol
 	}
 	if view.Symbol.Doc != "" {
 		if _, err := fmt.Fprintf(stdout, "doc=%q\n", oneLine(view.Symbol.Doc)); err != nil {
+			return err
+		}
+	}
+	if len(view.QualityWhy) > 0 {
+		if _, err := fmt.Fprintf(stdout, "quality_why=%q\n", strings.Join(view.QualityWhy, " | ")); err != nil {
 			return err
 		}
 	}

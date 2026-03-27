@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vladimirkasterin/ctx/internal/codebase"
 	"github.com/vladimirkasterin/ctx/internal/project"
 )
 
@@ -54,6 +55,132 @@ func TestDeleteAllSnapshotsClearsCurrent(t *testing.T) {
 	}
 }
 
+func TestCommitSnapshotStoresTelemetryAndSchemaVersion(t *testing.T) {
+	store := openTestStore(t)
+
+	version, err := store.SchemaVersion()
+	if err != nil {
+		t.Fatalf("SchemaVersion returned error: %v", err)
+	}
+	if version != ExpectedSchemaVersion() {
+		t.Fatalf("unexpected schema version: got %d want %d", version, ExpectedSchemaVersion())
+	}
+
+	snapshot, err := store.CommitSnapshotWithTelemetry(
+		"index",
+		"telemetry test",
+		[]codebase.ScanFile{
+			{
+				RelPath:   "go.mod",
+				Identity:  "example.com/project",
+				Hash:      "mod123",
+				SizeBytes: 32,
+				IsModule:  true,
+			},
+			{
+				RelPath:           "main.go",
+				PackageImportPath: "example.com/project",
+				Hash:              "abc123",
+				SizeBytes:         42,
+				IsGo:              true,
+			},
+		},
+		&codebase.Result{
+			Root:            "/tmp/project",
+			ModulePath:      "example.com/project",
+			GoVersion:       "1.26",
+			ImpactedPackage: map[string]struct{}{"example.com/project": {}},
+			Packages: []codebase.PackageFact{
+				{ImportPath: "example.com/project", Name: "main", DirPath: ".", FileCount: 1},
+			},
+			Symbols: []codebase.SymbolFact{
+				{
+					SymbolKey:         "example.com/project.main",
+					QName:             "example.com/project.main",
+					PackageImportPath: "example.com/project",
+					FilePath:          "main.go",
+					Name:              "main",
+					Kind:              "func",
+					Signature:         "func main()",
+					Line:              1,
+					Column:            1,
+				},
+			},
+		},
+		codebase.ChangeSet{Added: []string{"go.mod", "main.go"}},
+		true,
+		SnapshotCommitTelemetry{
+			ScannedFiles:    7,
+			ScanDuration:    15 * time.Millisecond,
+			AnalyzeDuration: 25 * time.Millisecond,
+		},
+	)
+	if err != nil {
+		t.Fatalf("CommitSnapshotWithTelemetry returned error: %v", err)
+	}
+	if snapshot.ScannedFiles != 7 {
+		t.Fatalf("expected scanned files=7, got %+v", snapshot)
+	}
+	if snapshot.ScanDurationMs != 15 || snapshot.AnalyzeDurationMs != 25 {
+		t.Fatalf("expected scan/analyze telemetry, got %+v", snapshot)
+	}
+	if snapshot.WriteDurationMs < 0 {
+		t.Fatalf("expected non-negative write duration, got %+v", snapshot)
+	}
+	if snapshot.TotalDurationMs() < 40 {
+		t.Fatalf("expected total duration to include scan/analyze timings, got %+v", snapshot)
+	}
+
+	files, err := store.CurrentFiles()
+	if err != nil {
+		t.Fatalf("CurrentFiles returned error: %v", err)
+	}
+	if files["go.mod"].Identity != "example.com/project" {
+		t.Fatalf("expected module file identity to roundtrip, got %+v", files["go.mod"])
+	}
+	if files["main.go"].Identity != "" {
+		t.Fatalf("did not expect plain source file identity to be populated, got %+v", files["main.go"])
+	}
+}
+
+func TestChangeCacheLifecycleFollowsSnapshot(t *testing.T) {
+	store := openTestStore(t)
+
+	insertTestSnapshot(t, store, 11, 0)
+	plan := codebase.ChangePlan{
+		Changes:          codebase.ChangeSet{Changed: []string{"pkg/service.go"}},
+		ImpactedPackages: []string{"example.com/project/pkg"},
+		Reason:           "package-scoped changes",
+	}
+	if err := store.SaveChangePlan(11, "fp-1", plan); err != nil {
+		t.Fatalf("SaveChangePlan returned error: %v", err)
+	}
+
+	loaded, ok, err := store.LoadChangePlan(11, "fp-1")
+	if err != nil {
+		t.Fatalf("LoadChangePlan returned error: %v", err)
+	}
+	if !ok || !loaded.CacheHit || loaded.Reason != plan.Reason {
+		t.Fatalf("expected cached plan roundtrip, got ok=%v plan=%+v", ok, loaded)
+	}
+
+	removed, err := store.DeleteSnapshots([]int64{11})
+	if err != nil {
+		t.Fatalf("DeleteSnapshots returned error: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected one snapshot to be removed, got %d", removed)
+	}
+
+	_, ok, err = store.LoadChangePlan(11, "fp-1")
+	if err != nil {
+		t.Fatalf("LoadChangePlan after delete returned error: %v", err)
+	}
+	if ok {
+		t.Fatal("expected cached change plan to be removed with its snapshot")
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 
@@ -69,7 +196,6 @@ func openTestStore(t *testing.T) *Store {
 		Root:       "/tmp/project",
 		ModulePath: "example.com/project",
 		GoVersion:  "1.26",
-		DBPath:     dbPath,
 	}); err != nil {
 		t.Fatalf("EnsureProject returned error: %v", err)
 	}

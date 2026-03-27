@@ -1,6 +1,6 @@
 # ctx
 
-`ctx` is a local Go and Python code-intelligence CLI for understanding a project as a system.
+`ctx` is a local Go, Python, and Rust code-intelligence CLI for understanding a project as a system.
 
 Give it a repository and it helps you explore in flow:
 
@@ -58,11 +58,11 @@ The tool is optimized for:
 
 ## What `ctx` Gives You
 
-`ctx` indexes a Go project, a Python project, or a mixed repository locally and keeps the result in a persistent SQLite-backed store.
+`ctx` indexes a Go project, a Python project, a Rust project, or a mixed repository locally and keeps the result in a persistent SQLite-backed store.
 
 It can:
 
-- build an index from the current Go, Python, or mixed project
+- build an index from the current Go, Python, Rust, or mixed project
 - detect changes since the previous snapshot
 - update the index incrementally
 - query functions, methods, structs, interfaces, classes, files, and packages
@@ -135,10 +135,13 @@ From there you can move naturally:
 
 ### 4. Work with a changing repo
 
-`ctx` keeps snapshots and refreshes itself incrementally. For common read commands, it can auto-refresh before answering if the working tree changed since the last snapshot.
+`ctx` keeps snapshots and refreshes itself incrementally. For common read commands, it can auto-refresh before answering if the working tree changed since the last snapshot. Repeated no-op checks reuse a stored change cache keyed by the current snapshot and scanned tree fingerprint.
+Dependency lockfiles and metadata files are now treated more precisely too: `go.sum`, `Cargo.lock`, and Python project metadata no longer force a full reindex when the current local source graph is unchanged, and crate/module manifests only stay conservative when identity or workspace shape is actually ambiguous.
+On macOS, `ctx watch` now prefers real filesystem events and falls back to polling when a native watcher cannot be established.
 
 ```bash
 ctx update .
+ctx watch .
 ctx diff --from 4 --to 5
 ctx status .
 ctx snapshots
@@ -238,23 +241,44 @@ Refresh the index incrementally after local changes.
 ctx update .
 ```
 
+### `ctx watch`
+
+Keep the snapshot fresh in a long-running loop. It polls the repository, applies incremental updates when needed, and stays quiet on repeated no-op states except for the initial cycle.
+
+```bash
+ctx watch .
+ctx watch . --interval 2s
+ctx watch . --interval 500ms --cycles 5 --explain
+```
+
 ### `ctx status`
 
-Show current snapshot, project inventory, and whether local changes exist.
+Show current snapshot, project inventory, latest index timings, and whether local changes exist.
 
 ```bash
 ctx status .
 ctx status . -ai
 ```
 
+### `ctx doctor`
+
+Inspect project detection, config, schema health, DB quick-check status, snapshot timing, and incremental update readiness.
+
+```bash
+ctx doctor .
+```
+
 ### `ctx report`
 
-Show a high-level project map: important packages, symbols, and hotspots.
+Show a high-level project map: important packages, files, symbols, and hotspots.
+Quality is now ranked with graph signals plus recent change proximity and entrypoint heuristics.
+Use `--explain` when you want the quality reasons and strongest indexed evidence behind each item.
 
 ```bash
 ctx report .
 ctx report . -limit 10
 ctx report . -ai
+ctx report . --explain
 ```
 
 ### `ctx symbol`
@@ -286,7 +310,7 @@ ctx diff --from 4 --to 5
 
 ### `ctx snapshots`
 
-List stored snapshots for the current project.
+List stored snapshots for the current project, including stored scan/analyze/write timings.
 
 ```bash
 ctx snapshots
@@ -295,7 +319,7 @@ ctx snapshots . -ai
 
 ### `ctx snapshot`
 
-Inspect one snapshot, or the current snapshot if no id is provided.
+Inspect one snapshot, or the current snapshot if no id is provided, with stored inventory and timing telemetry.
 
 ```bash
 ctx snapshot
@@ -330,6 +354,7 @@ Legacy full-project dump mode for clipboard/export scenarios.
 ctx dump
 ctx dump . -copy
 ctx dump . -output report.txt
+ctx dump . -keep-empty -include-generated
 ```
 
 ## Human Output vs AI Output
@@ -415,7 +440,7 @@ This is the heart of the tool: not just “show me code”, but “help me under
 
 ## Technical Notes
 
-Today `ctx` is focused on Go and Python and uses a local persistent index built from the repository itself.
+Today `ctx` is focused on Go, Python, and practical Rust support and uses a local persistent index built from the repository itself.
 
 At a high level it relies on:
 
@@ -425,6 +450,7 @@ At a high level it relies on:
 - `go/types`
 - `go/packages`
 - Python's built-in `ast` module through a bundled local analyzer
+- Cargo manifest discovery plus a local Rust source parser for crates, workspaces, files, packages, tests, and common symbols
 - SQLite for local storage and snapshots
 
 The important point is not the implementation detail, but the product behavior:
@@ -435,6 +461,7 @@ The important point is not the implementation detail, but the product behavior:
 - queryable project graph
 
 For Python analysis, `python3` needs to be available on your `PATH`.
+Rust support is currently best-effort for symbols and tests and does not yet provide a full typed call/reference graph like Go.
 
 ## Current Scope
 
@@ -442,7 +469,8 @@ Current focus:
 
 - local Go projects
 - local Python projects
-- mixed Go + Python repositories
+- local Rust projects
+- mixed Go + Python + Rust repositories
 - CLI-first workflows
 - human shell exploration
 - persistent project intelligence without a server
@@ -453,6 +481,7 @@ Known limitations:
 - mandatory AI dependency
 - distributed indexing platform
 - perfect Python type inference or runtime-aware dataflow
+- perfect Rust macro expansion, trait-resolution-aware references, or a full rustc-quality semantic graph
 
 ## Example Reading Session
 
@@ -486,12 +515,23 @@ but “stay in flow and keep learning the shape of the system”.
 
 The older file-dump behavior still exists as `ctx dump`.
 
+By default it tries to stay practical and compact:
+
+- respects `.gitignore` and `.ctxignore`
+- skips empty or whitespace-only files
+- skips generated files and obvious minified bundles
+- skips low-value artifacts like `.gitkeep`, `*.log`, and `*.tmp`
+
 Supported flags:
 
 - `-hidden`
 - `-max-file-size`
 - `-output`
 - `-copy`
+- `-keep-empty`
+- `-include-generated`
+- `-include-minified`
+- `-include-artifacts`
 - `-extensions`
 - `-summary-only`
 - `-no-tree`

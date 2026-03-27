@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/vladimirkasterin/ctx/internal/sourcerange"
 	"github.com/vladimirkasterin/ctx/internal/storage"
 )
 
@@ -40,7 +41,12 @@ func symbolBlockBounds(projectRoot string, symbol storage.SymbolMatch) (string, 
 	}
 
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	start, end := locateSymbolRange(path, data, symbol)
+	start, end := sourcerange.Locate(path, data, sourcerange.Symbol{
+		Name:     symbol.Name,
+		Kind:     symbol.Kind,
+		Receiver: symbol.Receiver,
+		Line:     symbol.Line,
+	})
 	if start == 0 || end == 0 || start > len(lines) {
 		start, end = fallbackSymbolRange(len(lines), symbol.Line)
 	}

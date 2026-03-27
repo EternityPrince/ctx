@@ -20,8 +20,12 @@ func Run(command cli.Command, stdout io.Writer) error {
 		return runIndexLike(command, stdout, false)
 	case "shell":
 		return runShell(command, stdout)
+	case "watch":
+		return runWatch(command, stdout)
 	case "status":
 		return runStatus(command, stdout)
+	case "doctor":
+		return runDoctor(command, stdout)
 	case "projects":
 		return runProjects(command, stdout)
 	case "symbol":

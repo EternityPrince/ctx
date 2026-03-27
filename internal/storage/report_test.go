@@ -29,6 +29,9 @@ func TestLoadReportViewAndFileSummaries(t *testing.T) {
 	if serviceSummary.RelatedTestCount != 1 || serviceSummary.TestLinkedSymbolCount != 2 || serviceSummary.RelevantSymbolCount != 3 {
 		t.Fatalf("unexpected service test linkage summary: %+v", serviceSummary)
 	}
+	if serviceSummary.QualityScore <= 0 || len(serviceSummary.QualityWhy) == 0 {
+		t.Fatalf("expected quality signals on service summary, got %+v", serviceSummary)
+	}
 
 	testSummary := summaries["pkg/service_test.go"]
 	if !testSummary.IsTest || testSummary.DeclaredTestCount != 1 {
@@ -44,7 +47,13 @@ func TestLoadReportViewAndFileSummaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFileSummary returned error: %v", err)
 	}
-	if loadedServiceSummary != serviceSummary {
+	if loadedServiceSummary.FilePath != serviceSummary.FilePath ||
+		loadedServiceSummary.PackageImportPath != serviceSummary.PackageImportPath ||
+		loadedServiceSummary.QualityScore != serviceSummary.QualityScore ||
+		loadedServiceSummary.GraphScore != serviceSummary.GraphScore ||
+		loadedServiceSummary.SymbolCount != serviceSummary.SymbolCount ||
+		loadedServiceSummary.RelatedTestCount != serviceSummary.RelatedTestCount ||
+		loadedServiceSummary.ReversePackageDeps != serviceSummary.ReversePackageDeps {
 		t.Fatalf("expected direct file summary to match map summary: got %+v want %+v", loadedServiceSummary, serviceSummary)
 	}
 
@@ -60,6 +69,21 @@ func TestLoadReportViewAndFileSummaries(t *testing.T) {
 	}
 	if len(report.TopTypes) == 0 || report.TopTypes[0].Symbol.QName != "example.com/project/pkg.Service" {
 		t.Fatalf("unexpected top types: %+v", report.TopTypes)
+	}
+	if len(report.TopFiles) == 0 || report.TopFiles[0].Summary.FilePath != "pkg/service.go" {
+		t.Fatalf("unexpected top files: %+v", report.TopFiles)
+	}
+	if len(report.ProvenanceNotes) == 0 {
+		t.Fatalf("expected report provenance notes, got %+v", report)
+	}
+	if err := store.ExplainReportView(&report); err != nil {
+		t.Fatalf("ExplainReportView returned error: %v", err)
+	}
+	if !hasProvenanceKind(report.TopFunctions[0].Provenance, "call") || !hasProvenanceKind(report.TopFunctions[0].Provenance, "test") {
+		t.Fatalf("expected top function provenance to include call and test evidence, got %+v", report.TopFunctions[0].Provenance)
+	}
+	if !hasProvenanceKind(report.TopPackages[0].Provenance, "reverse_dep") || !hasProvenanceKind(report.TopPackages[0].Provenance, "symbol") {
+		t.Fatalf("expected top package provenance to include dependency and symbol evidence, got %+v", report.TopPackages[0].Provenance)
 	}
 
 	status, err := store.Status(3)
@@ -96,6 +120,130 @@ func TestLoadReportViewAndFileSummaries(t *testing.T) {
 	}
 }
 
+func TestLoadSymbolViewIncludesExplainabilityWhy(t *testing.T) {
+	store := openTestStore(t)
+	commitReportSnapshot(t, store, reportFixtureV1(), true)
+
+	runView, err := store.LoadSymbolView("example.com/project/pkg.Service.Run")
+	if err != nil {
+		t.Fatalf("LoadSymbolView(run) returned error: %v", err)
+	}
+	if runView.QualityScore <= 0 || len(runView.QualityWhy) == 0 {
+		t.Fatalf("expected quality score on symbol view, got %+v", runView)
+	}
+	if len(runView.Callers) == 0 || runView.Callers[0].Why == "" || runView.Callers[0].Relation != "static" {
+		t.Fatalf("expected explained caller edge, got %+v", runView.Callers)
+	}
+	if len(runView.Tests) == 0 || runView.Tests[0].Why == "" {
+		t.Fatalf("expected explained test links, got %+v", runView.Tests)
+	}
+
+	serviceView, err := store.LoadSymbolView("example.com/project/pkg.Service")
+	if err != nil {
+		t.Fatalf("LoadSymbolView(service) returned error: %v", err)
+	}
+	if len(serviceView.ReferencesIn) == 0 {
+		t.Fatalf("expected inbound references, got %+v", serviceView.ReferencesIn)
+	}
+	for _, ref := range serviceView.ReferencesIn {
+		if ref.Why == "" {
+			t.Fatalf("expected why for inbound refs, got %+v", serviceView.ReferencesIn)
+		}
+	}
+}
+
+func TestLoadReportViewQualityRecognizesEntrypointFiles(t *testing.T) {
+	store := openTestStore(t)
+	fixture := reportFixture{
+		scanned: []codebase.ScanFile{
+			{RelPath: "main.go", Hash: "main-v1", SizeBytes: 80, IsGo: true},
+			{RelPath: "pkg/run.go", Hash: "run-v1", SizeBytes: 120, IsGo: true},
+		},
+		result: &codebase.Result{
+			Root:       "/tmp/project",
+			ModulePath: "example.com/project",
+			GoVersion:  "1.26",
+			ImpactedPackage: map[string]struct{}{
+				"example.com/project":     {},
+				"example.com/project/pkg": {},
+			},
+			Packages: []codebase.PackageFact{
+				{ImportPath: "example.com/project", Name: "main", DirPath: ".", FileCount: 1},
+				{ImportPath: "example.com/project/pkg", Name: "pkg", DirPath: "pkg", FileCount: 1},
+			},
+			Symbols: []codebase.SymbolFact{
+				{
+					SymbolKey:         "example.com/project.main",
+					QName:             "example.com/project.main",
+					PackageImportPath: "example.com/project",
+					FilePath:          "main.go",
+					Name:              "main",
+					Kind:              "func",
+					Signature:         "func main()",
+					Line:              3,
+					Column:            1,
+				},
+				{
+					SymbolKey:         "example.com/project/pkg.Run",
+					QName:             "example.com/project/pkg.Run",
+					PackageImportPath: "example.com/project/pkg",
+					FilePath:          "pkg/run.go",
+					Name:              "Run",
+					Kind:              "func",
+					Signature:         "func Run()",
+					Line:              3,
+					Column:            1,
+					Exported:          true,
+				},
+			},
+			Dependencies: []codebase.DependencyFact{
+				{
+					FromPackageImportPath: "example.com/project",
+					ToPackageImportPath:   "example.com/project/pkg",
+					IsLocal:               true,
+				},
+			},
+			Calls: []codebase.CallFact{
+				{
+					CallerPackageImportPath: "example.com/project",
+					CallerSymbolKey:         "example.com/project.main",
+					CalleeSymbolKey:         "example.com/project/pkg.Run",
+					FilePath:                "main.go",
+					Line:                    4,
+					Column:                  2,
+					Dispatch:                "static",
+				},
+			},
+		},
+		changes: codebase.ChangeSet{
+			Added: []string{"main.go", "pkg/run.go"},
+		},
+	}
+	commitReportSnapshot(t, store, fixture, true)
+
+	report, err := store.LoadReportView(8)
+	if err != nil {
+		t.Fatalf("LoadReportView returned error: %v", err)
+	}
+
+	var mainFile *RankedFile
+	for idx := range report.TopFiles {
+		if report.TopFiles[idx].Summary.FilePath == "main.go" {
+			mainFile = &report.TopFiles[idx]
+			break
+		}
+	}
+	if mainFile == nil {
+		t.Fatalf("expected main.go in top files, got %+v", report.TopFiles)
+	}
+	if !mainFile.Summary.IsEntrypoint {
+		t.Fatalf("expected main.go to be marked as entrypoint, got %+v", mainFile)
+	}
+	if !containsString(mainFile.QualityWhy, "main entrypoint file") {
+		t.Fatalf("expected entrypoint reason in %+v", mainFile.QualityWhy)
+	}
+}
+
 func TestCommitSnapshotIncrementalKeepsUnchangedPackages(t *testing.T) {
 	store := openTestStore(t)
 	commitReportSnapshot(t, store, reportFixtureV1(), true)
@@ -126,6 +274,9 @@ func TestCommitSnapshotIncrementalKeepsUnchangedPackages(t *testing.T) {
 	}
 	if len(report.TopPackages) != 2 {
 		t.Fatalf("expected copied-forward package summaries to remain available, got %+v", report.TopPackages)
+	}
+	if len(report.TopFiles) == 0 || !report.TopFiles[0].Summary.ChangedRecently {
+		t.Fatalf("expected changed file quality to surface in top files, got %+v", report.TopFiles)
 	}
 }
 
@@ -560,4 +711,22 @@ func requireSymbolSignature(t *testing.T, symbols []SymbolMatch, qname, signatur
 		}
 	}
 	t.Fatalf("expected symbol %q in %+v", qname, symbols)
+}
+
+func hasProvenanceKind(values []ProvenanceItem, kind string) bool {
+	for _, value := range values {
+		if value.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

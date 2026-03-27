@@ -29,6 +29,7 @@ type RelatedSymbolView struct {
 	UseLine     int
 	UseColumn   int
 	Relation    string
+	Why         string
 }
 
 type RefView struct {
@@ -37,6 +38,7 @@ type RefView struct {
 	UseLine     int
 	UseColumn   int
 	Kind        string
+	Why         string
 }
 
 type TestView struct {
@@ -62,6 +64,14 @@ type PackageSummary struct {
 	TestCount   int
 	LocalDeps   []string
 	ReverseDeps []string
+}
+
+type ProvenanceItem struct {
+	Kind     string
+	Label    string
+	FilePath string
+	Line     int
+	Why      string
 }
 
 type SearchPackageMetrics struct {
@@ -104,6 +114,8 @@ type SymbolView struct {
 	ReferencesOut []RefView
 	Tests         []TestView
 	Siblings      []SymbolMatch
+	QualityScore  int
+	QualityWhy    []string
 }
 
 type ChangedSymbol struct {

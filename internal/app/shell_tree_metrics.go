@@ -53,6 +53,8 @@ func (s *shellSession) fileBadge(path string, isTest bool) string {
 		return s.palette.kindBadge("test")
 	case codebase.IsGoFile(path):
 		return "[" + s.palette.wrap("1;36", "GO") + "]"
+	case codebase.IsRustFile(path):
+		return "[" + s.palette.wrap("1;33", "RS") + "]"
 	case codebase.IsPythonFile(path):
 		return "[" + s.palette.wrap("1;34", "PY") + "]"
 	default:

@@ -16,15 +16,30 @@ import (
 
 func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 	files := make([]codebase.ScanFile, 0, 64)
+	walker, err := filter.NewWalker(root, false, "index")
+	if err != nil {
+		return nil, err
+	}
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return filter.HandleWalkError(path, walkErr)
 		}
 
+		relPath := ""
+		if path != root {
+			value, err := filepath.Rel(root, path)
+			if err != nil {
+				return fmt.Errorf("make relative path: %w", err)
+			}
+			relPath = filepath.ToSlash(value)
+		}
+
 		if d.IsDir() {
 			if path != root {
-				if skip, _ := filter.SkipDirectory(path, d.Name(), false); skip {
+				if skip, _, err := walker.ShouldSkipDirectory(path, relPath, d.Name()); err != nil {
+					return err
+				} else if skip {
 					return filepath.SkipDir
 				}
 			}
@@ -32,15 +47,15 @@ func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 		}
 
 		name := d.Name()
+		if skip, _, err := walker.ShouldSkipFile(path, relPath, name); err != nil {
+			return err
+		} else if skip {
+			return nil
+		}
 		isGo := strings.HasSuffix(name, ".go")
 		isModule := name == "go.mod" || name == "go.sum"
 		if !isGo && !isModule {
 			return nil
-		}
-
-		relPath, err := filepath.Rel(root, path)
-		if err != nil {
-			return fmt.Errorf("make relative path: %w", err)
 		}
 
 		data, err := os.ReadFile(path)
@@ -48,10 +63,16 @@ func (a *Adapter) Scan(root string) ([]codebase.ScanFile, error) {
 			return fmt.Errorf("read file %s: %w", path, err)
 		}
 
+		identity := ""
+		if name == "go.mod" {
+			identity = parseModulePathFromGoMod(data)
+		}
+
 		sum := sha256.Sum256(data)
 		files = append(files, codebase.ScanFile{
 			AbsPath:   path,
-			RelPath:   filepath.ToSlash(relPath),
+			RelPath:   relPath,
+			Identity:  identity,
 			Hash:      hex.EncodeToString(sum[:]),
 			SizeBytes: int64(len(data)),
 			IsGo:      isGo,
@@ -77,4 +98,17 @@ func findScanFile(scanned []codebase.ScanFile, relPath string) *codebase.ScanFil
 		}
 	}
 	return nil
+}
+
+func parseModulePathFromGoMod(data []byte) string {
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return ""
 }

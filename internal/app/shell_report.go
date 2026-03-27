@@ -109,7 +109,7 @@ func (s *shellSession) renderEntityReport(view storage.SymbolView) error {
 
 	if _, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  %s %s\n  %s %s\n  %s %s\n  %s callers=%d  callees=%d  refs_in=%d  refs_out=%d  tests=%d  coverage=%s\n  %s %s\n  %s local_deps=%d  reverse_deps=%d\n",
+		"%s\n  %s %s\n  %s %s\n  %s %s\n  %s callers=%d  callees=%d  refs_in=%d  refs_out=%d  tests=%d  coverage=%s\n  %s %s\n  %s score=%d\n  %s local_deps=%d  reverse_deps=%d\n",
 		s.palette.section("Contract"),
 		s.palette.label("Package:"),
 		shortenQName(s.info.ModulePath, view.Symbol.PackageImportPath),
@@ -126,6 +126,8 @@ func (s *shellSession) renderEntityReport(view storage.SymbolView) error {
 		s.palette.muted("n/a"),
 		s.palette.label("Test signal:"),
 		testGuidance.Signal,
+		s.palette.label("Quality:"),
+		view.QualityScore,
 		s.palette.label("Reach:"),
 		len(view.Package.LocalDeps),
 		len(view.Package.ReverseDeps),
@@ -137,6 +139,11 @@ func (s *shellSession) renderEntityReport(view storage.SymbolView) error {
 	}
 	if doc := oneLine(view.Symbol.Doc); doc != "" {
 		if _, err := fmt.Fprintf(s.stdout, "  %s %s\n", s.palette.label("Doc:"), doc); err != nil {
+			return err
+		}
+	}
+	if len(view.QualityWhy) > 0 {
+		if _, err := fmt.Fprintf(s.stdout, "  %s %s\n", s.palette.label("Why:"), strings.Join(view.QualityWhy, "; ")); err != nil {
 			return err
 		}
 	}
@@ -225,10 +232,9 @@ func (s *shellSession) loadFileReportEntries(relPath string) ([]fileReportEntry,
 		if err != nil {
 			return nil, err
 		}
-		score := len(view.Callers)*5 + len(view.Callees) + len(view.ReferencesIn)*2 + len(view.Tests)*3 + len(view.Package.ReverseDeps)*2
 		entries = append(entries, fileReportEntry{
 			View:   view,
-			Score:  score,
+			Score:  view.QualityScore,
 			Impact: impactLabel(len(view.Callers), len(view.ReferencesIn), len(view.Tests), len(view.Package.ReverseDeps)),
 		})
 	}
@@ -278,7 +284,7 @@ func (s *shellSession) renderFileReport(relPath, focusSymbolKey string, entries 
 
 	if _, err := fmt.Fprintf(
 		s.stdout,
-		"%s\n  %s %s %s\n  %s symbols=%d  funcs=%d  methods=%d  types=%d  tests=%d  test-link=%s\n  %s %s\n  %s ranked by callers + refs + tests + reverse deps\n\n",
+		"%s\n  %s %s %s\n  %s symbols=%d  funcs=%d  methods=%d  types=%d  tests=%d  test-link=%s\n  %s %s\n  %s score=%d\n\n",
 		s.palette.section("File Report"),
 		s.palette.label("File:"),
 		relPath,
@@ -292,9 +298,20 @@ func (s *shellSession) renderFileReport(relPath, focusSymbolKey string, entries 
 		s.coverageBadge(coveragePercent(summary.TestLinkedSymbolCount, summary.RelevantSymbolCount)),
 		s.palette.label("Risk:"),
 		riskSummary,
-		s.palette.label("Importance:"),
+		s.palette.label("Quality:"),
+		summary.QualityScore,
 	); err != nil {
 		return err
+	}
+	for _, why := range summary.QualityWhy {
+		if _, err := fmt.Fprintf(s.stdout, "  %s %s\n", s.palette.label("why:"), why); err != nil {
+			return err
+		}
+	}
+	if len(summary.QualityWhy) > 0 {
+		if _, err := fmt.Fprintln(s.stdout); err != nil {
+			return err
+		}
 	}
 
 	if len(entries) == 0 {
@@ -335,6 +352,11 @@ func (s *shellSession) renderFileReport(relPath, focusSymbolKey string, entries 
 		}
 		if doc := oneLine(entry.View.Symbol.Doc); doc != "" {
 			if _, err := fmt.Fprintf(s.stdout, "     %s %s\n", s.palette.label("doc:"), doc); err != nil {
+				return err
+			}
+		}
+		if len(entry.View.QualityWhy) > 0 {
+			if _, err := fmt.Fprintf(s.stdout, "     %s %s\n", s.palette.label("why:"), strings.Join(entry.View.QualityWhy, "; ")); err != nil {
 				return err
 			}
 		}
