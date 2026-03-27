@@ -170,8 +170,8 @@ func rustDependencyTarget(resolvedPath string, indexes rustSymbolIndexes) string
 		}
 		candidate = next
 	}
-	if idx := strings.Index(resolvedPath, "::"); idx >= 0 {
-		return resolvedPath[:idx]
+	if before, _, ok := strings.Cut(resolvedPath, "::"); ok {
+		return before
 	}
 	return resolvedPath
 }
@@ -575,19 +575,19 @@ func rustResolveConstructedType(scopePath, expr string, imports []rustResolvedIm
 	if expr == "" {
 		return rustResolvedType{}, false
 	}
-	if idx := strings.Index(expr, "::"); idx >= 0 {
-		left := strings.TrimSpace(expr[:idx])
+	if before, _, ok := strings.Cut(expr, "::"); ok {
+		left := strings.TrimSpace(before)
 		if resolved, ok := rustResolveTypeExpr(scopePath, left, imports, indexes); ok {
 			return resolved, true
 		}
 	}
-	if idx := strings.Index(expr, "{"); idx >= 0 {
-		if resolved, ok := rustResolveTypeExpr(scopePath, expr[:idx], imports, indexes); ok {
+	if before, _, ok := strings.Cut(expr, "{"); ok {
+		if resolved, ok := rustResolveTypeExpr(scopePath, before, imports, indexes); ok {
 			return resolved, true
 		}
 	}
-	if idx := strings.Index(expr, "("); idx >= 0 {
-		candidate := strings.TrimSpace(expr[:idx])
+	if before, _, ok := strings.Cut(expr, "("); ok {
+		candidate := strings.TrimSpace(before)
 		if resolved, ok := rustResolveTypeExpr(scopePath, candidate, imports, indexes); ok {
 			return resolved, true
 		}

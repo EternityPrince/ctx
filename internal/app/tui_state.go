@@ -323,10 +323,7 @@ func (m *tuiModel) selectedItem() (tuiItem, bool) {
 	if !ok || len(section.Items) == 0 {
 		return tuiItem{}, false
 	}
-	index := m.itemIndex
-	if index < 0 {
-		index = 0
-	}
+	index := max(m.itemIndex, 0)
 	if index >= len(section.Items) {
 		index = len(section.Items) - 1
 	}

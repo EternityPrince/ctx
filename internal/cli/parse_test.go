@@ -82,6 +82,16 @@ func TestParseDoctorCommand(t *testing.T) {
 	}
 }
 
+func TestParseProjectsDevReset(t *testing.T) {
+	command, err := Parse([]string{"projects", "--dev-reset"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if command.Name != "projects" || command.ProjectsVerb != "dev-reset" {
+		t.Fatalf("expected projects dev-reset command, got %+v", command)
+	}
+}
+
 func TestParseWatchCommand(t *testing.T) {
 	command, err := Parse([]string{"watch", ".", "--interval", "250ms", "--debounce", "500ms", "--cycles", "3", "--quiet", "--explain"})
 	if err != nil {

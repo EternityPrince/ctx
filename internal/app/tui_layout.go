@@ -30,10 +30,7 @@ func windowForIndex(total, index, height int) (int, int) {
 	if total <= height {
 		return 0, total
 	}
-	start := index - height/3
-	if start < 0 {
-		start = 0
-	}
+	start := max(index-height/3, 0)
 	end := start + height
 	if end > total {
 		end = total

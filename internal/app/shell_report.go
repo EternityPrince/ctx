@@ -142,11 +142,6 @@ func (s *shellSession) renderEntityReport(view storage.SymbolView) error {
 			return err
 		}
 	}
-	if len(view.QualityWhy) > 0 {
-		if _, err := fmt.Fprintf(s.stdout, "  %s %s\n", s.palette.label("Why:"), strings.Join(view.QualityWhy, "; ")); err != nil {
-			return err
-		}
-	}
 	if _, err := fmt.Fprintf(
 		s.stdout,
 		"  %s %s\n  %s %s\n\n",
@@ -155,6 +150,14 @@ func (s *shellSession) renderEntityReport(view storage.SymbolView) error {
 		s.palette.label("Reverse deps:"),
 		reverseDeps,
 	); err != nil {
+		return err
+	}
+	section := buildSymbolExplain(view, testGuidance)
+	section.Facts = append([]explainFact{
+		{Key: "Risk", Value: riskSummary},
+		{Key: "Reach", Value: fmt.Sprintf("local_deps=%d reverse_deps=%d", len(view.Package.LocalDeps), len(view.Package.ReverseDeps))},
+	}, section.Facts...)
+	if err := s.renderShellExplain(section); err != nil {
 		return err
 	}
 
@@ -303,15 +306,17 @@ func (s *shellSession) renderFileReport(relPath, focusSymbolKey string, entries 
 	); err != nil {
 		return err
 	}
-	for _, why := range summary.QualityWhy {
-		if _, err := fmt.Fprintf(s.stdout, "  %s %s\n", s.palette.label("why:"), why); err != nil {
-			return err
+	focusLabel := ""
+	if focusSymbolKey != "" {
+		for _, entry := range entries {
+			if entry.View.Symbol.SymbolKey == focusSymbolKey {
+				focusLabel = shortenQName(s.info.ModulePath, entry.View.Symbol.QName)
+				break
+			}
 		}
 	}
-	if len(summary.QualityWhy) > 0 {
-		if _, err := fmt.Fprintln(s.stdout); err != nil {
-			return err
-		}
+	if err := s.renderShellExplain(s.buildShellFileExplain(summary, nil, riskSummary, nil, focusLabel)); err != nil {
+		return err
 	}
 
 	if len(entries) == 0 {

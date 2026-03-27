@@ -97,7 +97,7 @@ func ParseSetupPyManifestMeta(data []byte) ManifestMeta {
 
 func ParseRequirementsManifestMeta(data []byte) ManifestMeta {
 	meta := ManifestMeta{Kind: "requirements.txt"}
-	for _, rawLine := range strings.Split(string(data), "\n") {
+	for rawLine := range strings.SplitSeq(string(data), "\n") {
 		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "-r ") || strings.HasPrefix(line, "--requirement ") {
 			continue
@@ -116,7 +116,7 @@ func ParseRequirementsManifestMeta(data []byte) ManifestMeta {
 func ParsePipfileManifestMeta(data []byte) ManifestMeta {
 	meta := ManifestMeta{Kind: "Pipfile"}
 	section := ""
-	for _, rawLine := range strings.Split(string(data), "\n") {
+	for rawLine := range strings.SplitSeq(string(data), "\n") {
 		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

@@ -41,17 +41,17 @@ func parseGoMod(path string) (string, string, error) {
 
 	var modulePath string
 	var goVersion string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "//") {
 			continue
 		}
-		if strings.HasPrefix(line, "module ") {
-			modulePath = strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		if after, ok := strings.CutPrefix(line, "module "); ok {
+			modulePath = strings.TrimSpace(after)
 			continue
 		}
-		if strings.HasPrefix(line, "go ") {
-			goVersion = strings.TrimSpace(strings.TrimPrefix(line, "go "))
+		if after, ok := strings.CutPrefix(line, "go "); ok {
+			goVersion = strings.TrimSpace(after)
 		}
 	}
 

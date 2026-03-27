@@ -51,10 +51,10 @@ func shortenQName(modulePath, qname string) string {
 	if modulePath == "" {
 		return qname
 	}
-	if trimmed := strings.TrimPrefix(qname, modulePath+"/"); trimmed != qname {
+	if trimmed, ok := strings.CutPrefix(qname, modulePath+"/"); ok {
 		return trimmed
 	}
-	if trimmed := strings.TrimPrefix(qname, modulePath+"."); trimmed != qname {
+	if trimmed, ok := strings.CutPrefix(qname, modulePath+"."); ok {
 		return trimmed
 	}
 	return qname

@@ -85,10 +85,7 @@ func (s *Store) LoadReportView(limit int) (ReportView, error) {
 		return ReportView{}, fmt.Errorf("no snapshots available")
 	}
 
-	candidateLimit := limit * 4
-	if candidateLimit < 24 {
-		candidateLimit = 24
-	}
+	candidateLimit := max(limit*4, 24)
 
 	view := ReportView{Snapshot: current}
 	if view.TopPackages, err = s.loadTopPackages(current.ID, candidateLimit); err != nil {

@@ -247,7 +247,7 @@ func (s *shellSession) showImpact(query string) error {
 	if err := s.beginScreen("Impact"); err != nil {
 		return err
 	}
-	if err := renderHumanImpactView(s.stdout, s.info.Root, s.info.ModulePath, view, guidance, 3, false); err != nil {
+	if err := renderHumanImpactView(s.stdout, s.info.Root, s.info.ModulePath, view, guidance, 3, true); err != nil {
 		return err
 	}
 	currentView, err := s.store.LoadSymbolView(symbolKey)

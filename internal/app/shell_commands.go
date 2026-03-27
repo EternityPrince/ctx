@@ -212,8 +212,8 @@ func (s *shellSession) printHelp() error {
 }
 
 func (s *shellSession) runAction(action string) error {
-	if strings.HasPrefix(action, "lens:") {
-		return s.applyLens(strings.TrimPrefix(action, "lens:"), "")
+	if after, ok := strings.CutPrefix(action, "lens:"); ok {
+		return s.applyLens(after, "")
 	}
 	switch action {
 	case "file":

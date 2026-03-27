@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/vladimirkasterin/ctx/internal/storage"
 )
@@ -23,26 +22,12 @@ func (s *shellSession) renderSymbolJourney(view storage.SymbolView) error {
 	if err != nil {
 		return err
 	}
-
-	if _, err := fmt.Fprintf(
-		s.stdout,
-		"%s\n  %s callers=%d  refs_in=%d  refs_out=%d  tests=%d  coverage=%s\n  %s %s\n  %s %s\n  %s local_deps=%d  reverse_deps=%d  file_symbols=%d\n\n",
-		s.palette.section("Why It Matters"),
-		s.palette.label("Signals:"),
-		len(view.Callers),
-		len(view.ReferencesIn),
-		len(view.ReferencesOut),
-		len(view.Tests),
-		s.palette.muted("n/a"),
-		s.palette.label("Risk:"),
-		riskSummary,
-		s.palette.label("Tests:"),
-		testGuidance.Signal,
-		s.palette.label("Area:"),
-		len(view.Package.LocalDeps),
-		len(view.Package.ReverseDeps),
-		len(view.Siblings)+1,
-	); err != nil {
+	section := buildSymbolExplain(view, testGuidance)
+	section.Facts = append([]explainFact{
+		{Key: "Risk", Value: riskSummary},
+		{Key: "Area", Value: fmt.Sprintf("local_deps=%d reverse_deps=%d file_symbols=%d", len(view.Package.LocalDeps), len(view.Package.ReverseDeps), len(view.Siblings)+1)},
+	}, section.Facts...)
+	if err := s.renderShellExplain(section); err != nil {
 		return err
 	}
 
@@ -270,38 +255,32 @@ func (s *shellSession) renderFileJourneyOverview(filePath, focusSymbolKey string
 		packageName = shortenQName(s.info.ModulePath, focusView.Symbol.PackageImportPath)
 	}
 	if packageName == "" {
-		packageName = s.palette.muted("unknown")
+		packageName = "unknown"
 	}
 
-	fileImportance := "low"
 	totalCallers := 0
 	totalRefsIn := 0
 	totalRefsOut := 0
-	packageLocalDeps := 0
-	packageReverseDeps := 0
-	hotspots := s.palette.muted("none yet")
+	hotspotsLabel := "none yet"
 	riskSummary := "contained"
 	if len(symbols) > 0 {
 		var parts []string
 		for _, symbol := range symbols[:min(3, len(symbols))] {
 			parts = append(parts, fmt.Sprintf("%s[%s]", symbol.Name, symbol.Kind))
 		}
-		hotspots = s.palette.accent(strings.Join(parts, ", "))
+		hotspotsLabel = strings.Join(parts, ", ")
 	}
 
-	focus := s.palette.muted("first symbol in file")
+	focus := "first symbol in file"
 	if focusView != nil {
-		fileImportance = impactLabel(len(focusView.Callers), len(focusView.ReferencesIn), len(focusView.Tests), len(focusView.Package.ReverseDeps))
 		totalCallers = len(focusView.Callers)
 		totalRefsIn = len(focusView.ReferencesIn)
 		totalRefsOut = len(focusView.ReferencesOut)
-		packageLocalDeps = len(focusView.Package.LocalDeps)
-		packageReverseDeps = len(focusView.Package.ReverseDeps)
-		focus = s.palette.accent(shortenQName(s.info.ModulePath, focusView.Symbol.QName))
+		focus = shortenQName(s.info.ModulePath, focusView.Symbol.QName)
 	} else if focusSymbolKey != "" {
 		for _, symbol := range symbols {
 			if symbol.SymbolKey == focusSymbolKey {
-				focus = s.palette.accent(shortenQName(s.info.ModulePath, symbol.QName))
+				focus = shortenQName(s.info.ModulePath, symbol.QName)
 				break
 			}
 		}
@@ -309,87 +288,15 @@ func (s *shellSession) renderFileJourneyOverview(filePath, focusSymbolKey string
 	if hotScore, recentChanged, err := s.fileRiskSignals(filePath, 0); err == nil {
 		riskSummary = fileRiskSummary(summary, hotScore, recentChanged)
 	}
-
-	if _, err := fmt.Fprintf(s.stdout, "%s\n", s.palette.section("Why It Matters")); err != nil {
-		return err
+	section := s.buildShellFileExplain(summary, focusView, riskSummary, []string{hotspotsLabel}, focus)
+	section.Facts = append(section.Facts[:1], append([]explainFact{
+		{Key: "Signals", Value: fmt.Sprintf("callers=%d refs_in=%d refs_out=%d", totalCallers, totalRefsIn, totalRefsOut)},
+		{Key: "Explore", Value: "walk / source <n> / full <n> / full"},
+	}, section.Facts[1:]...)...)
+	if packageName != "" {
+		section.Facts[1].Value = packageName + " " + strings.TrimSpace(stripANSICodes(s.fileBadge(filePath, summary.IsTest)))
 	}
-	if err := s.writeFileJourneyRow(
-		fmt.Sprintf("%s %s", s.palette.label("File:"), filePath),
-		fmt.Sprintf("%s %s %s", s.palette.label("Package:"), packageName, s.fileBadge(filePath, summary.IsTest)),
-	); err != nil {
-		return err
-	}
-	if err := s.writeFileJourneyRow(
-		fmt.Sprintf("%s symbols=%d  fn=%d  methods=%d  types=%d", s.palette.label("Shape:"), summary.SymbolCount, summary.FuncCount, summary.MethodCount, summary.StructCount),
-		fmt.Sprintf("%s tests=%d  link=%s", s.palette.label("Test map:"), max(summary.DeclaredTestCount, summary.RelatedTestCount), s.coverageBadge(coveragePercent(summary.TestLinkedSymbolCount, summary.RelevantSymbolCount))),
-	); err != nil {
-		return err
-	}
-	if err := s.writeFileJourneyRow(
-		fmt.Sprintf("%s %s", s.palette.label("Importance:"), s.palette.badge(fileImportance)),
-		fmt.Sprintf("%s callers=%d  refs_in=%d  refs_out=%d", s.palette.label("Signals:"), totalCallers, totalRefsIn, totalRefsOut),
-	); err != nil {
-		return err
-	}
-	if err := s.writeFileJourneyRow(
-		fmt.Sprintf("%s local_deps=%d  reverse_deps=%d", s.palette.label("Reach:"), packageLocalDeps, packageReverseDeps),
-		fmt.Sprintf("%s %s", s.palette.label("Risk:"), riskSummary),
-	); err != nil {
-		return err
-	}
-	if err := s.writeFileJourneyRow(
-		fmt.Sprintf("%s %s", s.palette.label("Hotspots:"), hotspots),
-		fmt.Sprintf("%s %s", s.palette.label("Focus:"), focus),
-	); err != nil {
-		return err
-	}
-	if err := s.writeFileJourneyRow(
-		fmt.Sprintf("%s size=%s", s.palette.label("Footprint:"), shellHumanSize(summary.SizeBytes)),
-		fmt.Sprintf("%s %s / %s / %s / %s", s.palette.label("Explore:"), s.palette.accent("walk"), s.palette.accent("source <n>"), s.palette.accent("full <n>"), s.palette.accent("full")),
-	); err != nil {
-		return err
-	}
-	previewState := s.palette.muted("open a symbol to preview")
-	if focusView != nil {
-		previewState = s.palette.accent("focused body ready below")
-	}
-	if err := s.writeFileJourneyRow(
-		fmt.Sprintf("%s %s", s.palette.label("Preview:"), previewState),
-		"",
-	); err != nil {
-		return err
-	}
-	_, err := fmt.Fprintln(s.stdout)
-	return err
-}
-
-func (s *shellSession) writeFileJourneyRow(left, right string) error {
-	termWidth, _ := terminalSize()
-	if termWidth <= 0 {
-		termWidth = 120
-	}
-	usableWidth := max(72, termWidth-6)
-	leftWidth := (usableWidth - 4) / 2
-	rightWidth := usableWidth - 4 - leftWidth
-	left = fitShellColumn(left, leftWidth)
-	right = fitShellColumn(right, rightWidth)
-	_, err := fmt.Fprintf(s.stdout, "  %s  ||  %s\n", left, right)
-	return err
-}
-
-func fitShellColumn(value string, width int) string {
-	if width <= 0 {
-		return value
-	}
-	visible := stripANSICodes(value)
-	runes := []rune(visible)
-	if len(runes) > width {
-		if width <= 1 {
-			return string(runes[:width])
-		}
-		return string(runes[:width-1]) + "…"
-	}
-	return value + strings.Repeat(" ", width-utf8.RuneCountInString(visible))
+	return s.renderShellExplain(section)
 }
 
 func averageLineLabel(total, count int) string {

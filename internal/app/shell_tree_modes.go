@@ -133,7 +133,7 @@ func treeNodeForScope(root *projecttree.Node, scope string) (*projecttree.Node, 
 	}
 
 	current := root
-	for _, part := range strings.Split(scope, "/") {
+	for part := range strings.SplitSeq(scope, "/") {
 		found := false
 		for _, child := range current.Children {
 			if child.IsDir && child.Name == part {

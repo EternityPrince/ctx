@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -530,10 +531,8 @@ func appendImpactPackageWhy(byPackage map[string][]string, pkg, why string) {
 	if pkg == "" || why == "" {
 		return
 	}
-	for _, existing := range byPackage[pkg] {
-		if existing == why {
-			return
-		}
+	if slices.Contains(byPackage[pkg], why) {
+		return
 	}
 	byPackage[pkg] = append(byPackage[pkg], why)
 }
@@ -544,10 +543,8 @@ func appendImpactFileWhy(byFile map[string][]string, filePath, why string) {
 	if filePath == "" || why == "" {
 		return
 	}
-	for _, existing := range byFile[filePath] {
-		if existing == why {
-			return
-		}
+	if slices.Contains(byFile[filePath], why) {
+		return
 	}
 	byFile[filePath] = append(byFile[filePath], why)
 }
@@ -664,10 +661,8 @@ func appendUniqueString(values *[]string, value string) {
 	if value == "" {
 		return
 	}
-	for _, existing := range *values {
-		if existing == value {
-			return
-		}
+	if slices.Contains(*values, value) {
+		return
 	}
 	*values = append(*values, value)
 }

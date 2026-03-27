@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -336,10 +337,8 @@ func buildImpactedSymbols(diff DiffView) []SymbolImpactDelta {
 		if why == "" {
 			return
 		}
-		for _, existing := range item.Why {
-			if existing == why {
-				return
-			}
+		if slices.Contains(item.Why, why) {
+			return
 		}
 		item.Why = append(item.Why, why)
 	}

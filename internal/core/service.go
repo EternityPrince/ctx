@@ -313,10 +313,7 @@ func (s *service) planMetrics(state ProjectState, plan codebase.ChangePlan) code
 	}
 
 	if totalPackages > 0 {
-		reused := totalPackages - metrics.ExpandedPackageCount
-		if reused < 0 {
-			reused = 0
-		}
+		reused := max(totalPackages-metrics.ExpandedPackageCount, 0)
 		metrics.ReusedPackageCount = reused
 		metrics.ReusePercent = int(float64(reused) * 100 / float64(totalPackages))
 	}

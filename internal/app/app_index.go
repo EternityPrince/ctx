@@ -241,6 +241,13 @@ func runProjects(command cli.Command, stdout io.Writer) error {
 		}
 		_, err = fmt.Fprintf(stdout, "Pruned %d project(s)\n", removed)
 		return err
+	case "dev-reset":
+		stats, err := storage.DeleteAllProjects()
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stdout, "Dev reset complete: projects=%d snapshots=%d freed=%s\n", stats.ProjectsRemoved, stats.SnapshotsRemoved, shellHumanSize(stats.BytesFreed))
+		return err
 	case "status":
 		record, err := storage.ResolveProject(command.ProjectArg)
 		if err != nil {

@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/vladimirkasterin/ctx/internal/codebase"
@@ -482,7 +482,7 @@ func deleteSnapshotsTx(tx *sql.Tx, ids []int64, allowDeleteCurrent bool) (int, e
 	if len(normalized) == 0 {
 		return 0, nil
 	}
-	sort.Slice(normalized, func(i, j int) bool { return normalized[i] < normalized[j] })
+	slices.Sort(normalized)
 
 	tables := []string{"packages", "files", "symbols", "package_deps", "refs", "call_edges", "tests", "test_links", "change_cache", "snapshots"}
 	removed := 0

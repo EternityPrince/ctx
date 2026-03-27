@@ -33,7 +33,7 @@ func IsMinifiedText(name, content string, totalLines int) bool {
 	}
 
 	maxLineLength := 0
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if len(line) > maxLineLength {
 			maxLineLength = len(line)
 		}

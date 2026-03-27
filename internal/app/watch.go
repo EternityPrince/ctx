@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -139,12 +140,7 @@ func coalesceWatchWake(backend watchBackend, initial watchWake, debounce time.Du
 }
 
 func watchReasonsContain(values []string, needle string) bool {
-	for _, value := range values {
-		if value == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, needle)
 }
 
 func runWatchCycle(root string) (watchCycleResult, error) {

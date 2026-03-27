@@ -13,10 +13,7 @@ func (m *tuiModel) draw() error {
 		return err
 	}
 
-	leftWidth := width / 3
-	if leftWidth < 34 {
-		leftWidth = 34
-	}
+	leftWidth := max(width/3, 34)
 	if leftWidth > 48 {
 		leftWidth = 48
 	}
@@ -35,7 +32,7 @@ func (m *tuiModel) draw() error {
 	builder.WriteString(screenLine(m.palette.rule(""), width))
 	builder.WriteByte('\n')
 
-	for idx := 0; idx < bodyHeight; idx++ {
+	for idx := range bodyHeight {
 		leftLine := ""
 		if idx < len(left) {
 			leftLine = left[idx]

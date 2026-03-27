@@ -105,13 +105,13 @@ func findScanFile(scanned []codebase.ScanFile, relPath string) *codebase.ScanFil
 }
 
 func parseModulePathFromGoMod(data []byte) string {
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "//") {
 			continue
 		}
-		if strings.HasPrefix(line, "module ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		if after, ok := strings.CutPrefix(line, "module "); ok {
+			return strings.TrimSpace(after)
 		}
 	}
 	return ""

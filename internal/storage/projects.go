@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -21,6 +22,12 @@ type ProjectRecord struct {
 	UpdatedAt         time.Time
 	DBPath            string
 	SizeBytes         int64
+}
+
+type ProjectResetStats struct {
+	ProjectsRemoved  int
+	SnapshotsRemoved int
+	BytesFreed       int64
 }
 
 func ResolveProject(projectArg string) (ProjectRecord, error) {
@@ -140,4 +147,75 @@ func PruneProjects() (int, error) {
 		removed++
 	}
 	return removed, nil
+}
+
+func DeleteAllProjects() (ProjectResetStats, error) {
+	records, err := ListProjects()
+	if err != nil {
+		return ProjectResetStats{}, err
+	}
+
+	projectsRoot, err := project.ProjectsRoot()
+	if err != nil {
+		return ProjectResetStats{}, err
+	}
+	entries, err := os.ReadDir(projectsRoot)
+	if err != nil {
+		return ProjectResetStats{}, fmt.Errorf("read projects root: %w", err)
+	}
+
+	known := make(map[string]ProjectRecord, len(records))
+	for _, record := range records {
+		known[record.ID] = record
+	}
+
+	stats := ProjectResetStats{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dirPath := filepath.Join(projectsRoot, entry.Name())
+		size, err := dirSize(dirPath)
+		if err != nil {
+			return stats, err
+		}
+		stats.BytesFreed += size
+		stats.ProjectsRemoved++
+		if record, ok := known[entry.Name()]; ok {
+			stats.SnapshotsRemoved += record.SnapshotCount
+		}
+		if err := os.RemoveAll(dirPath); err != nil {
+			return stats, err
+		}
+	}
+	return stats, nil
+}
+
+func dirSize(root string) (int64, error) {
+	info, err := os.Stat(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if !info.IsDir() {
+		return info.Size(), nil
+	}
+
+	var total int64
+	err = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info == nil || info.IsDir() {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }

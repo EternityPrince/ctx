@@ -72,6 +72,12 @@ func Parse(args []string) (Command, error) {
 		return parseSymbol(args[1:])
 	case "impact":
 		return parseImpact(args[1:])
+	case "trace":
+		return parseTrace(args[1:])
+	case "handoff":
+		return parseHandoff(args[1:])
+	case "review":
+		return parseReview(args[1:])
 	case "history":
 		return parseHistory(args[1:])
 	case "cochange":
@@ -335,6 +341,203 @@ func parseImpact(args []string) (Command, error) {
 		Depth:      depth,
 		Explain:    explain,
 		OutputMode: mode,
+	}, nil
+}
+
+func parseTrace(args []string) (Command, error) {
+	query := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		query = args[0]
+		args = args[1:]
+	}
+
+	fs := flag.NewFlagSet("trace", flag.ContinueOnError)
+	fs.SetOutput(ioDiscard{})
+
+	var root string
+	var depth int
+	var limit int
+	var ai bool
+	var human bool
+	var explain bool
+	fs.StringVar(&root, "root", ".", "project root or any path inside the project")
+	fs.IntVar(&depth, "depth", 4, "transitive caller depth")
+	fs.IntVar(&limit, "limit", 6, "number of items to show per trace section")
+	fs.BoolVar(&explain, "explain", false, "show why each trace branch is included and what the blind spots are")
+	bindOutputModeFlags(fs, &ai, &human)
+	fs.Usage = func() {}
+
+	if err := fs.Parse(args); err != nil {
+		return Command{}, usageError(err)
+	}
+
+	remaining := fs.Args()
+	if query == "" {
+		if len(remaining) != 1 {
+			return Command{}, usageError(errors.New("trace command requires exactly one query"))
+		}
+		query = remaining[0]
+		remaining = remaining[1:]
+	}
+	if len(remaining) != 0 {
+		return Command{}, usageError(errors.New("trace command requires exactly one query"))
+	}
+
+	mode, err := resolveOutputMode(ai, human)
+	if err != nil {
+		return Command{}, usageError(err)
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return Command{}, fmt.Errorf("resolve root path: %w", err)
+	}
+
+	return Command{
+		Name:       "trace",
+		Root:       absRoot,
+		Query:      query,
+		Depth:      depth,
+		Limit:      limit,
+		Explain:    explain,
+		OutputMode: mode,
+	}, nil
+}
+
+func parseHandoff(args []string) (Command, error) {
+	query := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		query = args[0]
+		args = args[1:]
+	}
+
+	fs := flag.NewFlagSet("handoff", flag.ContinueOnError)
+	fs.SetOutput(ioDiscard{})
+
+	var root string
+	var limit int
+	var ai bool
+	var human bool
+	var explain bool
+	var packageScope bool
+	var fileScope bool
+	var symbolScope bool
+	fs.StringVar(&root, "root", ".", "project root or any path inside the project")
+	fs.IntVar(&limit, "limit", 6, "number of items to show per handoff section")
+	fs.BoolVar(&explain, "explain", false, "show why ctx picked this area and how the handoff plan was built")
+	fs.BoolVar(&packageScope, "package", false, "treat the query as a package/area")
+	fs.BoolVar(&fileScope, "file", false, "treat the query as a file")
+	fs.BoolVar(&symbolScope, "symbol", false, "treat the query as a symbol")
+	bindOutputModeFlags(fs, &ai, &human)
+	fs.Usage = func() {}
+
+	if err := fs.Parse(args); err != nil {
+		return Command{}, usageError(err)
+	}
+
+	remaining := fs.Args()
+	if query == "" {
+		if len(remaining) != 1 {
+			return Command{}, usageError(errors.New("handoff command requires exactly one query"))
+		}
+		query = remaining[0]
+		remaining = remaining[1:]
+	}
+	if len(remaining) != 0 {
+		return Command{}, usageError(errors.New("handoff command requires exactly one query"))
+	}
+	if (packageScope && fileScope) || (packageScope && symbolScope) || (fileScope && symbolScope) {
+		return Command{}, usageError(errors.New("handoff scope must be one of --symbol, --package, or --file"))
+	}
+
+	scope := "auto"
+	switch {
+	case packageScope:
+		scope = "package"
+	case fileScope:
+		scope = "file"
+	case symbolScope:
+		scope = "symbol"
+	}
+
+	mode, err := resolveOutputMode(ai, human)
+	if err != nil {
+		return Command{}, usageError(err)
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return Command{}, fmt.Errorf("resolve root path: %w", err)
+	}
+
+	return Command{
+		Name:       "handoff",
+		Root:       absRoot,
+		Query:      query,
+		Scope:      scope,
+		Limit:      limit,
+		Explain:    explain,
+		OutputMode: mode,
+	}, nil
+}
+
+func parseReview(args []string) (Command, error) {
+	scope := "working-tree"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		switch strings.ToLower(strings.TrimSpace(args[0])) {
+		case "working-tree", "workingtree", "working_tree", "wt":
+			scope = "working-tree"
+			args = args[1:]
+		case "snapshot", "snapshots":
+			scope = "snapshot"
+			args = args[1:]
+		}
+	}
+
+	fs := flag.NewFlagSet("review", flag.ContinueOnError)
+	fs.SetOutput(ioDiscard{})
+
+	var root string
+	var fromID int64
+	var toID int64
+	var limit int
+	var ai bool
+	var human bool
+	var explain bool
+	fs.StringVar(&root, "root", ".", "project root or any path inside the project")
+	fs.Int64Var(&fromID, "from", 0, "from snapshot id")
+	fs.Int64Var(&toID, "to", 0, "to snapshot id")
+	fs.IntVar(&limit, "limit", 6, "number of items to show per review section")
+	fs.BoolVar(&explain, "explain", false, "show why ctx considers these areas risky or review-worthy")
+	bindOutputModeFlags(fs, &ai, &human)
+	fs.Usage = func() {}
+
+	if err := fs.Parse(args); err != nil {
+		return Command{}, usageError(err)
+	}
+	if len(fs.Args()) != 0 {
+		return Command{}, usageError(errors.New("review does not accept extra positional arguments"))
+	}
+
+	mode, err := resolveOutputMode(ai, human)
+	if err != nil {
+		return Command{}, usageError(err)
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return Command{}, fmt.Errorf("resolve root path: %w", err)
+	}
+
+	return Command{
+		Name:         "review",
+		Root:         absRoot,
+		Scope:        scope,
+		FromSnapshot: fromID,
+		ToSnapshot:   toID,
+		Limit:        limit,
+		Explain:      explain,
+		OutputMode:   mode,
 	}, nil
 }
 
@@ -892,6 +1095,9 @@ func parseProjects(args []string) (Command, error) {
 	if len(args) == 0 {
 		return Command{Name: "projects", ProjectsVerb: "list"}, nil
 	}
+	if len(args) == 1 && args[0] == "--dev-reset" {
+		return Command{Name: "projects", ProjectsVerb: "dev-reset"}, nil
+	}
 
 	verb := args[0]
 	switch verb {
@@ -910,6 +1116,11 @@ func parseProjects(args []string) (Command, error) {
 			return Command{}, usageError(errors.New("projects prune does not accept extra arguments"))
 		}
 		return Command{Name: "projects", ProjectsVerb: "prune"}, nil
+	case "dev-reset":
+		if len(args) != 1 {
+			return Command{}, usageError(errors.New("projects dev-reset does not accept extra arguments"))
+		}
+		return Command{Name: "projects", ProjectsVerb: "dev-reset"}, nil
 	case "status":
 		if len(args) != 2 {
 			return Command{}, usageError(errors.New("projects status requires a project id or root path"))
@@ -1034,11 +1245,11 @@ Usage:
   ctx status [path] [--explain] [-h|-human|-a|-ai]
   ctx doctor [path]
   ctx report [project|risky|seams|hotspots|low-tested|changed-since] [path] [--explain] [-h|-human|-a|-ai] [-limit N]
-  ctx symbol <query> [--root path] [-h|-human|-a|-ai]
-  ctx impact <query> [--root path] [--depth N] [-h|-human|-a|-ai]
-  ctx history <query> [--root path] [--package|--symbol] [--limit N]
-  ctx cochange <query> [--root path] [--package|--symbol] [--limit N]
-  ctx diff [--root path] [--from N] [--to N]
+  ctx symbol <query> [--root path] [--explain] [-h|-human|-a|-ai]
+  ctx impact <query> [--root path] [--depth N] [--explain] [-h|-human|-a|-ai]
+  ctx history <query> [--root path] [--package|--symbol] [--limit N] [--explain]
+  ctx cochange <query> [--root path] [--package|--symbol] [--limit N] [--explain]
+  ctx diff [--root path] [--from N] [--to N] [--explain]
   ctx snapshots [path] [-h|-human|-a|-ai]
   ctx snapshots list [--root path|--project id] [-h|-human|-a|-ai]
   ctx snapshots rm <id...|all> [--root path|--project id]
@@ -1047,6 +1258,7 @@ Usage:
   ctx shell [query] [--root path]
   ctx watch [path] [--interval 2s] [--debounce 250ms] [--cycles N] [--quiet] [--explain]
   ctx projects [list|rm|prune|status]
+  ctx projects --dev-reset
   ctx projects snapshots <project> [list|rm|limit] ...
 
 Core Commands:
@@ -1064,7 +1276,7 @@ Core Commands:
   snapshots  list and manage stored snapshots for the project
   snapshot   inspect one snapshot and its stored inventory
   shell      explore the project in a human-oriented flow shell
-  projects   inspect and clean up locally indexed projects and jump into one globally
+  projects   inspect and clean up locally indexed projects and jump into one globally; --dev-reset wipes all local project DBs
   dump       legacy full file/context dump for clipboard or external tooling
 
 Output Modes:

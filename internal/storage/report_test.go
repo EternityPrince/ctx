@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/vladimirkasterin/ctx/internal/codebase"
@@ -723,10 +724,5 @@ func hasProvenanceKind(values []ProvenanceItem, kind string) bool {
 }
 
 func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }

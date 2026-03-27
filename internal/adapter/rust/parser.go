@@ -462,9 +462,9 @@ func expandRustUseSpec(spec string) []rustUseBinding {
 		case "self":
 			result = append(result, rustUseBinding{Path: "self", Alias: alias})
 		default:
-			if strings.HasSuffix(path, "::*") {
+			if before, ok := strings.CutSuffix(path, "::*"); ok {
 				result = append(result, rustUseBinding{
-					Path: strings.TrimSuffix(path, "::*"),
+					Path: before,
 					Glob: true,
 				})
 				continue
@@ -562,8 +562,8 @@ func rustCrateRoot(scopePath string) string {
 	if scopePath == "" {
 		return ""
 	}
-	if idx := strings.Index(scopePath, "::"); idx >= 0 {
-		return scopePath[:idx]
+	if before, _, ok := strings.Cut(scopePath, "::"); ok {
+		return before
 	}
 	return scopePath
 }
@@ -634,8 +634,8 @@ func rustImplReceiver(line string) (string, bool) {
 }
 
 func stripRustLineComment(line string) string {
-	if idx := strings.Index(line, "//"); idx >= 0 {
-		return line[:idx]
+	if before, _, ok := strings.Cut(line, "//"); ok {
+		return before
 	}
 	return line
 }

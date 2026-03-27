@@ -270,6 +270,11 @@ func helper() int {
 	if !strings.Contains(fileCard, "File Journey") {
 		t.Fatalf("expected file journey screen, got:\n%s", fileCard)
 	}
+	for _, expected := range []string{"Explain", "Surface:", "Precision:"} {
+		if !strings.Contains(fileCard, expected) {
+			t.Fatalf("expected %q in unified file explain output, got:\n%s", expected, fileCard)
+		}
+	}
 
 	output.Reset()
 	if _, err := session.handleWithStop("full"); err != nil {
@@ -413,6 +418,9 @@ def accepts(service: "Service") -> int:
 
 	text := stripANSICodes(output.String())
 	for _, expected := range []string{
+		"Explain",
+		"Blast radius:",
+		"Precision:",
 		"Blast Packages",
 		"why: dynamic importlib call edge from indexed call site",
 		"why: re-exported call edge from indexed call site",
@@ -464,6 +472,11 @@ func Handle() int {
 	text := stripANSICodes(output.String())
 	if !strings.Contains(text, "Adjacent Routes") || !strings.Contains(text, "Saved Views / Named Lenses") {
 		t.Fatalf("expected symbol journey to show neighboring routes and lenses, got:\n%s", text)
+	}
+	for _, expected := range []string{"Explain", "Surface:", "Precision:"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected %q in unified shell explain output, got:\n%s", expected, text)
+		}
 	}
 	if !strings.Contains(text, "Lens verify") || !strings.Contains(text, "Lens incoming") {
 		t.Fatalf("expected named lenses to be listed on the symbol card, got:\n%s", text)

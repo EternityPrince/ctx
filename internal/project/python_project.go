@@ -146,7 +146,7 @@ func parsePyProject(path string) (string, string, error) {
 	var name string
 	var version string
 
-	for _, rawLine := range strings.Split(string(data), "\n") {
+	for rawLine := range strings.SplitSeq(string(data), "\n") {
 		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

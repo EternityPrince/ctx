@@ -347,12 +347,13 @@ ctx shell Parse
 
 ### `ctx projects`
 
-Manage local project indexes.
+Manage local project indexes. `--dev-reset` is a dev-only shortcut that wipes all local indexed projects/snapshots and reports reclaimed disk usage.
 
 ```bash
 ctx projects list
 ctx projects rm <id-or-root>
 ctx projects prune
+ctx projects --dev-reset
 ```
 
 ### `ctx dump`
