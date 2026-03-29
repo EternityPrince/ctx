@@ -96,6 +96,8 @@ open 1
 ctx symbol CreateSession
 ctx impact CreateSession
 ctx trace CreateSession
+ctx travel "go run ./cmd/api/main.go" demo
+ctx travel show all
 ctx handoff CreateSession
 ```
 
@@ -326,6 +328,22 @@ Build one practical reading path around a symbol: declaration, upstream callers,
 ctx trace CreateSession
 ctx trace internal/auth.(*Service).Login --depth 4
 ctx trace internal/auth.(*Service).Login --depth 4 --explain
+```
+
+### `ctx travel`
+
+Infer the launch entrypoint from a run recipe, then build a practical reading path through the likely entry function, data flow, important callees, and nearby tests.
+By default `travel` also runs the recipe with a timeout and reports wall time, CPU time, peak RSS, and exit status.
+The reading path still comes from the indexed graph plus entrypoint heuristics, while the performance numbers describe the full recipe invocation, including wrapper or compile overhead.
+Each `travel` run is also saved into the project SQLite database, so you can reopen it later without recomputing the same scenario.
+
+```bash
+ctx travel "go run ./cmd/api/main.go" demo
+ctx travel --depth 5 --timeout 15s --explain "python -m app.cli" -- --verbose
+ctx travel "cargo run --bin worker"
+ctx travel --no-run "go run ./cmd/api/main.go"
+ctx travel show all
+ctx travel show 7
 ```
 
 ### `ctx handoff`

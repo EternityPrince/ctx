@@ -262,7 +262,7 @@ func finalizePlan(plan codebase.ChangePlan, fingerprint string, cacheHit, forceF
 
 func shouldAutoRefresh(commandName string) bool {
 	switch commandName {
-	case "report", "shell", "status", "symbol", "impact", "trace", "handoff", "diff", "snapshot", "snapshots":
+	case "report", "shell", "status", "symbol", "impact", "trace", "travel", "handoff", "diff", "snapshot", "snapshots":
 		return true
 	default:
 		return false

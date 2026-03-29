@@ -17,6 +17,11 @@ type Command struct {
 	Root          string
 	Query         string
 	Scope         string
+	RunRecipe     string
+	RunArgs       []string
+	TravelTimeout time.Duration
+	TravelNoRun   bool
+	TravelRunID   int64
 	Depth         int
 	Explain       bool
 	OutputMode    string
@@ -74,6 +79,8 @@ func Parse(args []string) (Command, error) {
 		return parseImpact(args[1:])
 	case "trace":
 		return parseTrace(args[1:])
+	case "travel":
+		return parseTravel(args[1:])
 	case "handoff":
 		return parseHandoff(args[1:])
 	case "review":
@@ -402,6 +409,188 @@ func parseTrace(args []string) (Command, error) {
 		Explain:    explain,
 		OutputMode: mode,
 	}, nil
+}
+
+func parseTravel(args []string) (Command, error) {
+	leading := make([]string, 0, len(args))
+	for idx := 0; idx < len(args); idx++ {
+		arg := args[idx]
+		if strings.HasPrefix(arg, "-") {
+			leading = append(leading, arg)
+			if travelFlagNeedsValue(arg) {
+				idx++
+				if idx >= len(args) {
+					return Command{}, usageError(fmt.Errorf("flag needs an argument: %s", arg))
+				}
+				leading = append(leading, args[idx])
+			}
+			continue
+		}
+		if arg == "show" {
+			return parseTravelShow(leading, args[idx+1:])
+		}
+		break
+	}
+
+	return parseTravelRun(args)
+}
+
+func parseTravelRun(args []string) (Command, error) {
+	leading := make([]string, 0, len(args))
+	recipe := ""
+	programArgs := make([]string, 0)
+
+	for idx := 0; idx < len(args); idx++ {
+		arg := args[idx]
+		if recipe != "" {
+			if arg == "--" && len(programArgs) == 0 {
+				programArgs = append(programArgs, args[idx+1:]...)
+				break
+			}
+			programArgs = append(programArgs, args[idx:]...)
+			break
+		}
+		if arg == "--" {
+			return Command{}, usageError(errors.New("travel command requires a quoted run recipe before `--`"))
+		}
+		if !strings.HasPrefix(arg, "-") {
+			recipe = arg
+			continue
+		}
+		leading = append(leading, arg)
+		if travelFlagNeedsValue(arg) {
+			idx++
+			if idx >= len(args) {
+				return Command{}, usageError(fmt.Errorf("flag needs an argument: %s", arg))
+			}
+			leading = append(leading, args[idx])
+		}
+	}
+	if strings.TrimSpace(recipe) == "" {
+		return Command{}, usageError(errors.New("travel command requires exactly one quoted run recipe"))
+	}
+
+	fs := flag.NewFlagSet("travel", flag.ContinueOnError)
+	fs.SetOutput(ioDiscard{})
+
+	var root string
+	var depth int
+	var limit int
+	var ai bool
+	var human bool
+	var explain bool
+	var timeout time.Duration
+	var noRun bool
+	fs.StringVar(&root, "root", ".", "project root or any path inside the project")
+	fs.IntVar(&depth, "depth", 4, "callee depth to follow from the inferred entrypoint")
+	fs.IntVar(&limit, "limit", 6, "number of items to show per travel section")
+	fs.DurationVar(&timeout, "timeout", 10*time.Second, "max time allowed for executing the run recipe while collecting performance metrics; use 0 to disable")
+	fs.BoolVar(&noRun, "no-run", false, "skip executing the run recipe and only build the static reading path")
+	fs.BoolVar(&explain, "explain", false, "show how ctx inferred the launch entrypoint and where the static view may miss runtime behavior")
+	bindOutputModeFlags(fs, &ai, &human)
+	fs.Usage = func() {}
+
+	if err := fs.Parse(leading); err != nil {
+		return Command{}, usageError(err)
+	}
+	if len(fs.Args()) != 0 {
+		return Command{}, usageError(errors.New("travel flags must appear before the run recipe"))
+	}
+
+	mode, err := resolveOutputMode(ai, human)
+	if err != nil {
+		return Command{}, usageError(err)
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return Command{}, fmt.Errorf("resolve root path: %w", err)
+	}
+
+	return Command{
+		Name:          "travel",
+		Root:          absRoot,
+		RunRecipe:     recipe,
+		RunArgs:       append([]string(nil), programArgs...),
+		TravelTimeout: timeout,
+		TravelNoRun:   noRun,
+		Depth:         depth,
+		Limit:         limit,
+		Explain:       explain,
+		OutputMode:    mode,
+	}, nil
+}
+
+func parseTravelShow(leadingFlags, args []string) (Command, error) {
+	target := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		target = args[0]
+		args = args[1:]
+	}
+
+	fs := flag.NewFlagSet("travel show", flag.ContinueOnError)
+	fs.SetOutput(ioDiscard{})
+
+	var root string
+	var ai bool
+	var human bool
+	fs.StringVar(&root, "root", ".", "project root or any path inside the project")
+	bindOutputModeFlags(fs, &ai, &human)
+	fs.Usage = func() {}
+
+	parseArgs := append(append([]string(nil), leadingFlags...), args...)
+	if err := fs.Parse(parseArgs); err != nil {
+		return Command{}, usageError(err)
+	}
+
+	remaining := fs.Args()
+	if target == "" {
+		if len(remaining) != 1 {
+			return Command{}, usageError(errors.New("travel show requires `all` or one run id"))
+		}
+		target = remaining[0]
+		remaining = remaining[1:]
+	}
+	if len(remaining) != 0 {
+		return Command{}, usageError(errors.New("travel show requires exactly one target: `all` or one run id"))
+	}
+
+	mode, err := resolveOutputMode(ai, human)
+	if err != nil {
+		return Command{}, usageError(err)
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return Command{}, fmt.Errorf("resolve root path: %w", err)
+	}
+
+	command := Command{
+		Name:       "travel",
+		Root:       absRoot,
+		OutputMode: mode,
+	}
+	if strings.EqualFold(strings.TrimSpace(target), "all") {
+		command.Scope = "show-all"
+		return command, nil
+	}
+	runID, err := strconv.ParseInt(strings.TrimSpace(target), 10, 64)
+	if err != nil || runID <= 0 {
+		return Command{}, usageError(fmt.Errorf("travel show target must be `all` or a positive id, got %q", target))
+	}
+	command.Scope = "show-one"
+	command.TravelRunID = runID
+	return command, nil
+}
+
+func travelFlagNeedsValue(arg string) bool {
+	switch {
+	case arg == "--root", arg == "--depth", arg == "--limit", arg == "--timeout":
+		return true
+	case strings.HasPrefix(arg, "--root="), strings.HasPrefix(arg, "--depth="), strings.HasPrefix(arg, "--limit="), strings.HasPrefix(arg, "--timeout="):
+		return false
+	default:
+		return false
+	}
 }
 
 func parseHandoff(args []string) (Command, error) {
@@ -1227,6 +1416,9 @@ Quick Start:
   ctx symbol CreateSession    inspect one symbol deeply
   ctx impact CreateSession    estimate blast radius
   ctx trace CreateSession     walk the code path around one symbol
+  ctx travel "go run ./cmd/api/main.go" demo
+                             inspect one launch path and save the run
+  ctx travel show all         list saved travel runs for the current project
   ctx handoff CreateSession   get a pragmatic reading/editing plan
   ctx review                  review current working-tree changes
   ctx report .                get a project map
@@ -1251,6 +1443,9 @@ Usage:
   ctx symbol <query> [--root path] [--explain] [-h|-human|-a|-ai]
   ctx impact <query> [--root path] [--depth N] [--explain] [-h|-human|-a|-ai]
   ctx trace <query> [--root path] [--depth N] [--limit N] [--explain] [-h|-human|-a|-ai]
+  ctx travel [--root path] [--depth N] [--limit N] [--timeout 10s] [--no-run] [--explain] [-h|-human|-a|-ai] "<run recipe>" [-- arg...]
+  ctx travel show [--root path] [-h|-human|-a|-ai] all
+  ctx travel show [--root path] [-h|-human|-a|-ai] <id>
   ctx handoff <query> [--root path] [--symbol|--package|--file] [--limit N] [--explain] [-h|-human|-a|-ai]
   ctx review [working-tree|snapshot] [--root path] [--from N] [--to N] [--limit N] [--explain] [-h|-human|-a|-ai]
   ctx history <query> [--root path] [--package|--symbol] [--limit N] [--explain]
@@ -1277,6 +1472,7 @@ Core Commands:
   symbol     show declaration, signature, context, refs, callers, callees, tests, impact
   impact     show what may be affected if a symbol changes
   trace      stitch declaration, callers, callees, tests, history, and blast radius into one reading path
+  travel     infer a launch entrypoint from a run recipe, optionally execute it with a timeout, save the result, and reopen saved travel runs
   handoff    prepare a fast, practical handoff for a symbol, package, or file before editing
   review     summarize risky working-tree or snapshot deltas for local review
   history    trace when a symbol or package was introduced and how it changed across snapshots

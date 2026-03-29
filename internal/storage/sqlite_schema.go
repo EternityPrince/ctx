@@ -164,6 +164,30 @@ func (s *Store) init() error {
 			created_at TEXT NOT NULL,
 			PRIMARY KEY (snapshot_id, scan_fingerprint)
 		)`,
+		`CREATE TABLE IF NOT EXISTS travel_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			created_at TEXT NOT NULL,
+			recipe TEXT NOT NULL,
+			launcher TEXT NOT NULL DEFAULT '',
+			run_args_json TEXT NOT NULL DEFAULT '[]',
+			entry_file TEXT NOT NULL DEFAULT '',
+			entry_symbol_qname TEXT NOT NULL DEFAULT '',
+			depth INTEGER NOT NULL DEFAULT 0,
+			limit_count INTEGER NOT NULL DEFAULT 0,
+			explain INTEGER NOT NULL DEFAULT 0,
+			timeout_ms INTEGER NOT NULL DEFAULT 0,
+			no_run INTEGER NOT NULL DEFAULT 0,
+			run_attempted INTEGER NOT NULL DEFAULT 0,
+			run_timed_out INTEGER NOT NULL DEFAULT 0,
+			run_status TEXT NOT NULL DEFAULT '',
+			run_exit_code INTEGER NOT NULL DEFAULT -1,
+			run_wall_ms INTEGER NOT NULL DEFAULT 0,
+			run_cpu_user_ms INTEGER NOT NULL DEFAULT 0,
+			run_cpu_system_ms INTEGER NOT NULL DEFAULT 0,
+			run_peak_rss_bytes INTEGER NOT NULL DEFAULT 0,
+			human_output TEXT NOT NULL DEFAULT '',
+			ai_output TEXT NOT NULL DEFAULT ''
+		)`,
 		`CREATE INDEX IF NOT EXISTS symbols_name_idx ON symbols (snapshot_id, name)`,
 		`CREATE INDEX IF NOT EXISTS symbols_qname_idx ON symbols (snapshot_id, qname)`,
 		`CREATE INDEX IF NOT EXISTS files_pkg_idx ON files (snapshot_id, package_import_path)`,
@@ -176,6 +200,7 @@ func (s *Store) init() error {
 		`CREATE INDEX IF NOT EXISTS deps_target_idx ON package_deps (snapshot_id, to_package_import_path)`,
 		`CREATE INDEX IF NOT EXISTS tests_symbol_idx ON test_links (snapshot_id, symbol_key)`,
 		`CREATE INDEX IF NOT EXISTS change_cache_created_idx ON change_cache (snapshot_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS travel_runs_created_idx ON travel_runs (created_at, id)`,
 	}
 
 	for _, stmt := range stmts {

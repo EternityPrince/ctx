@@ -34,6 +34,8 @@ func Run(command cli.Command, stdout io.Writer) error {
 		return runImpact(command, stdout)
 	case "trace":
 		return runTrace(command, stdout)
+	case "travel":
+		return runTravel(command, stdout)
 	case "handoff":
 		return runHandoff(command, stdout)
 	case "review":

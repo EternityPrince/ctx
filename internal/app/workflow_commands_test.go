@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vladimirkasterin/ctx/internal/cli"
 	"github.com/vladimirkasterin/ctx/internal/storage"
@@ -40,6 +41,97 @@ func TestRunTraceOutputsActionableSections(t *testing.T) {
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("expected %q in trace output, got:\n%s", expected, text)
+		}
+	}
+}
+
+func TestRunTravelOutputsLaunchReadingPath(t *testing.T) {
+	root := seedTravelCommandFixture(t)
+
+	var out bytes.Buffer
+	if err := runTravel(cli.Command{
+		Name:          "travel",
+		Root:          root,
+		RunRecipe:     "go run ./cmd/tool/main.go",
+		RunArgs:       []string{"demo", "--verbose"},
+		TravelTimeout: 30 * time.Second,
+		Depth:         4,
+		Limit:         4,
+		Explain:       true,
+		OutputMode:    cli.OutputHuman,
+	}, &out); err != nil {
+		t.Fatalf("runTravel returned error: %v", err)
+	}
+
+	text := stripANSICodes(out.String())
+	for _, expected := range []string{
+		"CTX Travel",
+		"Launch Overview",
+		"Travel ID",
+		"Run recipe",
+		"go run ./cmd/tool/main.go",
+		"Performance",
+		"Wall time",
+		"CPU total",
+		"Peak RSS",
+		"Likely Call Path",
+		"Important Functions Along This Launch",
+		"Read This Order",
+		"parseArgs",
+		"pipeline.Run",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected %q in travel output, got:\n%s", expected, text)
+		}
+	}
+}
+
+func TestRunTravelShowListsAndReopensSavedRuns(t *testing.T) {
+	root := seedTravelCommandFixture(t)
+
+	var first bytes.Buffer
+	if err := runTravel(cli.Command{
+		Name:          "travel",
+		Root:          root,
+		RunRecipe:     "go run ./cmd/tool/main.go",
+		RunArgs:       []string{"demo"},
+		TravelTimeout: 30 * time.Second,
+		Depth:         4,
+		Limit:         4,
+		Explain:       true,
+		OutputMode:    cli.OutputHuman,
+	}, &first); err != nil {
+		t.Fatalf("runTravel seed returned error: %v", err)
+	}
+
+	var list bytes.Buffer
+	if err := runTravel(cli.Command{
+		Name:       "travel",
+		Root:       root,
+		Scope:      "show-all",
+		OutputMode: cli.OutputHuman,
+	}, &list); err != nil {
+		t.Fatalf("runTravel show all returned error: %v", err)
+	}
+	listText := stripANSICodes(list.String())
+	if !strings.Contains(listText, "CTX Travel Runs") || !strings.Contains(listText, "#1") || !strings.Contains(listText, "go run ./cmd/tool/main.go") {
+		t.Fatalf("unexpected travel show all output:\n%s", listText)
+	}
+
+	var one bytes.Buffer
+	if err := runTravel(cli.Command{
+		Name:        "travel",
+		Root:        root,
+		Scope:       "show-one",
+		TravelRunID: 1,
+		OutputMode:  cli.OutputHuman,
+	}, &one); err != nil {
+		t.Fatalf("runTravel show one returned error: %v", err)
+	}
+	oneText := stripANSICodes(one.String())
+	for _, expected := range []string{"CTX Travel", "Travel ID", "1", "Likely Call Path"} {
+		if !strings.Contains(oneText, expected) {
+			t.Fatalf("expected %q in travel show one output, got:\n%s", expected, oneText)
 		}
 	}
 }
@@ -251,4 +343,65 @@ func TestRun(t *testing.T) {
 		t.Fatalf("Close second returned error: %v", err)
 	}
 	return root, first, second
+}
+
+func seedTravelCommandFixture(t *testing.T) string {
+	t.Helper()
+	t.Setenv("CTX_HOME", t.TempDir())
+
+	root := t.TempDir()
+	writeProjectStateFixture(t, root, "go.mod", "module example.com/travel\n\ngo 1.26\n")
+	writeProjectStateFixture(t, root, "cmd/tool/main.go", `package main
+
+import "example.com/travel/internal/pipeline"
+
+func main() {
+	cfg := parseArgs()
+	result := pipeline.Run(cfg)
+	emit(result)
+}
+
+func parseArgs() string { return loadConfig("cli") }
+
+func loadConfig(source string) string { return source }
+
+func emit(value string) string { return value }
+`)
+	writeProjectStateFixture(t, root, "internal/pipeline/run.go", `package pipeline
+
+func Run(cfg string) string {
+	prepared := normalize(cfg)
+	return execute(prepared)
+}
+
+func normalize(value string) string { return value }
+
+func execute(value string) string { return value + "-ok" }
+`)
+	writeProjectStateFixture(t, root, "internal/pipeline/run_test.go", `package pipeline
+
+import "testing"
+
+func TestRun(t *testing.T) {
+	if Run("cli") == "" {
+		t.Fatal("empty")
+	}
+}
+`)
+
+	state, err := openProjectState(root)
+	if err != nil {
+		t.Fatalf("openProjectState returned error: %v", err)
+	}
+	if _, committed, err := projectService.ApplySnapshot(state, "index", "travel fixture", false); err != nil {
+		_ = state.Close()
+		t.Fatalf("ApplySnapshot returned error: %v", err)
+	} else if !committed {
+		_ = state.Close()
+		t.Fatal("expected travel fixture snapshot to be committed")
+	}
+	if err := state.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	return root
 }

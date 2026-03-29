@@ -180,6 +180,47 @@ func TestParseTraceHandoffAndReviewCommands(t *testing.T) {
 	}
 }
 
+func TestParseTravelCommand(t *testing.T) {
+	command, err := Parse([]string{"travel", "--root", ".", "--depth", "5", "--limit", "7", "--timeout", "15s", "--no-run", "--explain", "-ai", "go run ./cmd/tool/main.go", "--", "--verbose", "demo"})
+	if err != nil {
+		t.Fatalf("Parse travel returned error: %v", err)
+	}
+
+	if command.Name != "travel" {
+		t.Fatalf("expected travel command, got %q", command.Name)
+	}
+	if command.RunRecipe != "go run ./cmd/tool/main.go" {
+		t.Fatalf("expected run recipe to be parsed, got %q", command.RunRecipe)
+	}
+	if command.Depth != 5 || command.Limit != 7 || !command.Explain || command.OutputMode != OutputAI {
+		t.Fatalf("unexpected travel command flags: %+v", command)
+	}
+	if command.TravelTimeout != 15*time.Second || !command.TravelNoRun {
+		t.Fatalf("expected timeout/no-run to be parsed, got %+v", command)
+	}
+	if len(command.RunArgs) != 2 || command.RunArgs[0] != "--verbose" || command.RunArgs[1] != "demo" {
+		t.Fatalf("expected runtime args to be preserved, got %+v", command.RunArgs)
+	}
+}
+
+func TestParseTravelShowCommands(t *testing.T) {
+	all, err := Parse([]string{"travel", "show", "all"})
+	if err != nil {
+		t.Fatalf("Parse travel show all returned error: %v", err)
+	}
+	if all.Name != "travel" || all.Scope != "show-all" {
+		t.Fatalf("unexpected travel show all command: %+v", all)
+	}
+
+	one, err := Parse([]string{"travel", "--root", ".", "show", "-ai", "12"})
+	if err != nil {
+		t.Fatalf("Parse travel show id returned error: %v", err)
+	}
+	if one.Name != "travel" || one.Scope != "show-one" || one.TravelRunID != 12 || one.OutputMode != OutputAI {
+		t.Fatalf("unexpected travel show id command: %+v", one)
+	}
+}
+
 func TestParseDiffHistoryAndCoChangeExplain(t *testing.T) {
 	diff, err := Parse([]string{"diff", "--from", "1", "--to", "2", "--explain"})
 	if err != nil {
