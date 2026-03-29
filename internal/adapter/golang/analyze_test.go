@@ -90,3 +90,53 @@ func TestAnalyzeFailsWhenAllLocalPackagesAreBroken(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestAnalyzeExtractsAnalyzerBackedFlowFacts(t *testing.T) {
+	root := t.TempDir()
+
+	mustWriteScanFile(t, root+"/go.mod", "module example.com/project\n\ngo 1.26\n")
+	mustWriteScanFile(t, root+"/pkg/service.go", `package pkg
+
+type Service struct{}
+
+func (s *Service) normalize(value string) string { return value }
+
+func (s *Service) Run(input string) string { return s.normalize(input) }
+`)
+
+	info, err := project.Resolve(root)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	adapter := NewAdapter()
+	scanned, err := adapter.Scan(root)
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+
+	result, err := adapter.Analyze(info, codebase.ScanMap(scanned), nil)
+	if err != nil {
+		t.Fatalf("Analyze returned error: %v", err)
+	}
+
+	requireFlowFact(t, result.Flows, "method|example.com/project/pkg|example.com/project/pkg.Service|ptr|Run", "receiver_to_call", "*Service", "method|example.com/project/pkg|example.com/project/pkg.Service|ptr|normalize")
+	requireFlowFact(t, result.Flows, "method|example.com/project/pkg|example.com/project/pkg.Service|ptr|Run", "param_to_call", "input", "method|example.com/project/pkg|example.com/project/pkg.Service|ptr|normalize")
+	requireFlowFact(t, result.Flows, "method|example.com/project/pkg|example.com/project/pkg.Service|ptr|Run", "call_to_return", "example.com/project/pkg.(*Service).normalize", "return")
+}
+
+func requireFlowFact(t *testing.T, flows []codebase.FlowFact, ownerKey, kind, sourceLabel, target string) {
+	t.Helper()
+	for _, flow := range flows {
+		if flow.OwnerSymbolKey != ownerKey || flow.Kind != kind {
+			continue
+		}
+		if flow.SourceLabel != sourceLabel {
+			continue
+		}
+		if flow.TargetSymbolKey == target || flow.TargetLabel == target {
+			return
+		}
+	}
+	t.Fatalf("expected flow %s %s %s -> %s, got %+v", ownerKey, kind, sourceLabel, target, flows)
+}

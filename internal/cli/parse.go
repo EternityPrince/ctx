@@ -1211,7 +1211,7 @@ func (ioDiscard) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-const usageMessage = `ctx: local Go and Python code intelligence for exploring a project as a system.
+const usageMessage = `ctx: local Go, Python, and Rust code intelligence for exploring a project as a system.
 
 Philosophy:
   Give ctx a Go codebase, a Python codebase, a Rust codebase, or a mixed repository and it helps you read it in flow:
@@ -1226,6 +1226,9 @@ Quick Start:
   ctx index .                 build the first project snapshot
   ctx symbol CreateSession    inspect one symbol deeply
   ctx impact CreateSession    estimate blast radius
+  ctx trace CreateSession     walk the code path around one symbol
+  ctx handoff CreateSession   get a pragmatic reading/editing plan
+  ctx review                  review current working-tree changes
   ctx report .                get a project map
   ctx shell                   enter the exploration shell
   ctx watch .                 keep snapshots fresh in the background
@@ -1247,6 +1250,9 @@ Usage:
   ctx report [project|risky|seams|hotspots|low-tested|changed-since] [path] [--explain] [-h|-human|-a|-ai] [-limit N]
   ctx symbol <query> [--root path] [--explain] [-h|-human|-a|-ai]
   ctx impact <query> [--root path] [--depth N] [--explain] [-h|-human|-a|-ai]
+  ctx trace <query> [--root path] [--depth N] [--limit N] [--explain] [-h|-human|-a|-ai]
+  ctx handoff <query> [--root path] [--symbol|--package|--file] [--limit N] [--explain] [-h|-human|-a|-ai]
+  ctx review [working-tree|snapshot] [--root path] [--from N] [--to N] [--limit N] [--explain] [-h|-human|-a|-ai]
   ctx history <query> [--root path] [--package|--symbol] [--limit N] [--explain]
   ctx cochange <query> [--root path] [--package|--symbol] [--limit N] [--explain]
   ctx diff [--root path] [--from N] [--to N] [--explain]
@@ -1270,6 +1276,9 @@ Core Commands:
   report     summarize the project or deterministic slices like risky/seams/hotspots/low-tested/changed-since, with optional provenance
   symbol     show declaration, signature, context, refs, callers, callees, tests, impact
   impact     show what may be affected if a symbol changes
+  trace      stitch declaration, callers, callees, tests, history, and blast radius into one reading path
+  handoff    prepare a fast, practical handoff for a symbol, package, or file before editing
+  review     summarize risky working-tree or snapshot deltas for local review
   history    trace when a symbol or package was introduced and how it changed across snapshots
   cochange   find files and packages that often move together in snapshot diffs
   diff       compare snapshots and see what changed

@@ -109,6 +109,35 @@ func (s *Store) init() error {
 			dispatch TEXT NOT NULL,
 			PRIMARY KEY (snapshot_id, caller_symbol_key, callee_symbol_key, file_path, line, col)
 		)`,
+		`CREATE TABLE IF NOT EXISTS flow_edges (
+			snapshot_id INTEGER NOT NULL,
+			owner_package_import_path TEXT NOT NULL,
+			owner_symbol_key TEXT NOT NULL,
+			file_path TEXT NOT NULL,
+			line INTEGER NOT NULL,
+			col INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			source_kind TEXT NOT NULL DEFAULT '',
+			source_label TEXT NOT NULL DEFAULT '',
+			source_symbol_key TEXT NOT NULL DEFAULT '',
+			target_kind TEXT NOT NULL DEFAULT '',
+			target_label TEXT NOT NULL DEFAULT '',
+			target_symbol_key TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (
+				snapshot_id,
+				owner_symbol_key,
+				file_path,
+				line,
+				col,
+				kind,
+				source_kind,
+				source_label,
+				source_symbol_key,
+				target_kind,
+				target_label,
+				target_symbol_key
+			)
+		)`,
 		`CREATE TABLE IF NOT EXISTS tests (
 			snapshot_id INTEGER NOT NULL,
 			test_key TEXT NOT NULL,
@@ -140,6 +169,8 @@ func (s *Store) init() error {
 		`CREATE INDEX IF NOT EXISTS files_pkg_idx ON files (snapshot_id, package_import_path)`,
 		`CREATE INDEX IF NOT EXISTS calls_caller_idx ON call_edges (snapshot_id, caller_symbol_key)`,
 		`CREATE INDEX IF NOT EXISTS calls_callee_idx ON call_edges (snapshot_id, callee_symbol_key)`,
+		`CREATE INDEX IF NOT EXISTS flow_owner_idx ON flow_edges (snapshot_id, owner_symbol_key)`,
+		`CREATE INDEX IF NOT EXISTS flow_target_idx ON flow_edges (snapshot_id, target_symbol_key)`,
 		`CREATE INDEX IF NOT EXISTS refs_target_idx ON refs (snapshot_id, to_symbol_key)`,
 		`CREATE INDEX IF NOT EXISTS refs_source_idx ON refs (snapshot_id, from_symbol_key)`,
 		`CREATE INDEX IF NOT EXISTS deps_target_idx ON package_deps (snapshot_id, to_package_import_path)`,
@@ -184,7 +215,7 @@ func (s *Store) init() error {
 
 func (s *Store) copyForward(tx *sql.Tx, fromID, toID int64, impacted []string) error {
 	if len(impacted) == 0 {
-		tables := []string{"packages", "symbols", "package_deps", "refs", "call_edges", "tests", "test_links"}
+		tables := []string{"packages", "symbols", "package_deps", "refs", "call_edges", "flow_edges", "tests", "test_links"}
 		for _, table := range tables {
 			if _, err := tx.Exec(`INSERT INTO `+table+` SELECT ?, `+forwardColumns(table)+` FROM `+table+` WHERE snapshot_id = ?`, append([]any{toID}, fromID)...); err != nil {
 				return fmt.Errorf("copy table %s: %w", table, err)
@@ -206,6 +237,9 @@ func (s *Store) copyForward(tx *sql.Tx, fromID, toID int64, impacted []string) e
 		return err
 	}
 	if err := copyTableByPackage(tx, "call_edges", "caller_package_import_path", fromID, toID, impacted); err != nil {
+		return err
+	}
+	if err := copyTableByPackage(tx, "flow_edges", "owner_package_import_path", fromID, toID, impacted); err != nil {
 		return err
 	}
 	if err := copyTableByPackage(tx, "tests", "package_import_path", fromID, toID, impacted); err != nil {

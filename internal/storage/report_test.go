@@ -151,6 +151,14 @@ func TestLoadSymbolViewIncludesExplainabilityWhy(t *testing.T) {
 			t.Fatalf("expected why for inbound refs, got %+v", serviceView.ReferencesIn)
 		}
 	}
+
+	handleView, err := store.LoadSymbolView("example.com/project/api.Handle")
+	if err != nil {
+		t.Fatalf("LoadSymbolView(handle) returned error: %v", err)
+	}
+	if len(handleView.Flow) == 0 || handleView.Flow[0].Why == "" {
+		t.Fatalf("expected analyzer-backed flow edges on handle view, got %+v", handleView.Flow)
+	}
 }
 
 func TestLoadReportViewQualityRecognizesEntrypointFiles(t *testing.T) {
@@ -268,6 +276,14 @@ func TestCommitSnapshotIncrementalKeepsUnchangedPackages(t *testing.T) {
 		t.Fatalf("LoadFileSymbols(pkg/service.go) returned error: %v", err)
 	}
 	requireSymbolSignature(t, serviceSymbols, "example.com/project/pkg.Service.Run", "func (*Service) Run(ctx string) error")
+
+	handleView, err := store.LoadSymbolView("example.com/project/api.Handle")
+	if err != nil {
+		t.Fatalf("LoadSymbolView(api.Handle) returned error: %v", err)
+	}
+	if len(handleView.Flow) == 0 {
+		t.Fatalf("expected copied flow edges for unchanged package, got %+v", handleView.Flow)
+	}
 
 	report, err := store.LoadReportView(4)
 	if err != nil {
@@ -392,6 +408,21 @@ func reportFixtureV1() reportFixture {
 					Line:                    6,
 					Column:                  2,
 					Dispatch:                "static",
+				},
+			},
+			Flows: []codebase.FlowFact{
+				{
+					OwnerPackageImportPath: "example.com/project/api",
+					OwnerSymbolKey:         "example.com/project/api.Handle",
+					FilePath:               "api/handler.go",
+					Line:                   6,
+					Column:                 2,
+					Kind:                   "call_to_return",
+					SourceKind:             "call",
+					SourceLabel:            "example.com/project/pkg.Service.Run",
+					SourceSymbolKey:        "example.com/project/pkg.Service.Run",
+					TargetKind:             "return",
+					TargetLabel:            "return",
 				},
 			},
 			Tests: []codebase.TestFact{

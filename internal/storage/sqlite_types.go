@@ -41,6 +41,22 @@ type RefView struct {
 	Why         string
 }
 
+type FlowEdgeView struct {
+	Kind            string
+	SourceKind      string
+	SourceLabel     string
+	SourceSymbolKey string
+	SourceQName     string
+	TargetKind      string
+	TargetLabel     string
+	TargetSymbolKey string
+	TargetQName     string
+	UseFilePath     string
+	UseLine         int
+	UseColumn       int
+	Why             string
+}
+
 type TestView struct {
 	TestKey           string
 	PackageImportPath string
@@ -107,25 +123,25 @@ type ImpactFileReason struct {
 }
 
 type ImpactView struct {
-	Target            SymbolMatch
-	Package           PackageSummary
-	DirectCallers     []RelatedSymbolView
-	TransitiveCallers []ImpactNode
-	InboundRefs       []RefView
-	ReferencePackages []string
-	CallerPackages    []string
-	BlastPackages     []string
+	Target                  SymbolMatch
+	Package                 PackageSummary
+	DirectCallers           []RelatedSymbolView
+	TransitiveCallers       []ImpactNode
+	InboundRefs             []RefView
+	ReferencePackages       []string
+	CallerPackages          []string
+	BlastPackages           []string
 	ReferencePackageReasons []ImpactPackageReason
 	CallerPackageReasons    []ImpactPackageReason
 	BlastPackageReasons     []ImpactPackageReason
-	BlastFileReasons   []ImpactFileReason
-	ExpansionWhy       []string
-	BlastFiles        []string
-	EmpiricalFiles    []CoChangeItem
-	EmpiricalPackages []CoChangeItem
-	Tests             []TestView
-	RecentDelta       SymbolImpactDelta
-	HasRecentDelta    bool
+	BlastFileReasons        []ImpactFileReason
+	ExpansionWhy            []string
+	BlastFiles              []string
+	EmpiricalFiles          []CoChangeItem
+	EmpiricalPackages       []CoChangeItem
+	Tests                   []TestView
+	RecentDelta             SymbolImpactDelta
+	HasRecentDelta          bool
 }
 
 type SymbolView struct {
@@ -135,6 +151,7 @@ type SymbolView struct {
 	Callees       []RelatedSymbolView
 	ReferencesIn  []RefView
 	ReferencesOut []RefView
+	Flow          []FlowEdgeView
 	Tests         []TestView
 	Siblings      []SymbolMatch
 	QualityScore  int

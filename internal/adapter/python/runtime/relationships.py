@@ -104,6 +104,7 @@ class ScopeState:
         self.import_call_aliases = set(import_call_aliases)
         self.local_names = set(local_names)
         self.local_bindings = {}
+        self.param_names = set()
         self.in_annotation = False
         self.in_type_checking = False
 
@@ -116,10 +117,14 @@ class ScopeState:
     def seed_function_args(self, args):
         for arg in list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs):
             self.bind_name(arg.arg, self.binding_from_annotation(arg.annotation))
+            if arg.arg not in ("self", "cls"):
+                self.param_names.add(arg.arg)
         if args.vararg:
             self.bind_name(args.vararg.arg, None)
+            self.param_names.add(args.vararg.arg)
         if args.kwarg:
             self.bind_name(args.kwarg.arg, None)
+            self.param_names.add(args.kwarg.arg)
 
     def bind_name(self, name, binding):
         self.local_names.add(name)
@@ -288,6 +293,25 @@ class ScopeState:
             ),
             "dynamic_import",
         )
+
+    def receiver_label(self):
+        if self.class_symbol:
+            return self.class_symbol.get("Name", "") or "receiver"
+        return "receiver"
+
+    def flow_source(self, expr):
+        if isinstance(expr, ast.Starred):
+            return self.flow_source(expr.value)
+        if isinstance(expr, ast.Attribute):
+            return self.flow_source(expr.value)
+        if isinstance(expr, ast.Subscript):
+            return self.flow_source(expr.value)
+        if isinstance(expr, ast.Name):
+            if expr.id in ("self", "cls") and self.class_symbol:
+                return "receiver", self.receiver_label()
+            if expr.id in self.param_names:
+                return "param", expr.id
+        return "", ""
 
 
 class RelationshipVisitor(ast.NodeVisitor):
@@ -473,6 +497,88 @@ class RelationshipVisitor(ast.NodeVisitor):
                 node.col_offset + 1,
                 call_dispatch(symbol, meta),
             )
+            flow_kind, flow_label = self.state.flow_source(node.func)
+            if flow_kind and flow_label:
+                self.state.analyzer.add_flow(
+                    self.state.package_path,
+                    self.state.owner,
+                    self.state.rel_path,
+                    node.lineno,
+                    node.col_offset + 1,
+                    f"{flow_kind}_to_call",
+                    source_kind=flow_kind,
+                    source_label=flow_label,
+                    target_kind="call",
+                    target_label=symbol.get("QName", ""),
+                    target_symbol=symbol,
+                )
+            for arg in node.args:
+                flow_kind, flow_label = self.state.flow_source(arg)
+                if not flow_kind or not flow_label:
+                    continue
+                self.state.analyzer.add_flow(
+                    self.state.package_path,
+                    self.state.owner,
+                    self.state.rel_path,
+                    node.lineno,
+                    node.col_offset + 1,
+                    f"{flow_kind}_to_call",
+                    source_kind=flow_kind,
+                    source_label=flow_label,
+                    target_kind="call",
+                    target_label=symbol.get("QName", ""),
+                    target_symbol=symbol,
+                )
+        self.generic_visit(node)
+
+    def visit_Return(self, node):
+        if node.value is not None:
+            if isinstance(node.value, ast.Call):
+                kind, symbol, _ = self.state.resolve_expr_meta(node.value.func)
+                if kind in ("symbol", "instance") and symbol:
+                    self.state.analyzer.add_flow(
+                        self.state.package_path,
+                        self.state.owner,
+                        self.state.rel_path,
+                        node.lineno,
+                        node.col_offset + 1,
+                        "call_to_return",
+                        source_kind="call",
+                        source_label=symbol.get("QName", ""),
+                        source_symbol=symbol,
+                        target_kind="return",
+                        target_label="return",
+                    )
+                else:
+                    flow_kind, flow_label = self.state.flow_source(node.value)
+                    if flow_kind and flow_label:
+                        self.state.analyzer.add_flow(
+                            self.state.package_path,
+                            self.state.owner,
+                            self.state.rel_path,
+                            node.lineno,
+                            node.col_offset + 1,
+                            f"{flow_kind}_to_return",
+                            source_kind=flow_kind,
+                            source_label=flow_label,
+                            target_kind="return",
+                            target_label="return",
+                        )
+            else:
+                flow_kind, flow_label = self.state.flow_source(node.value)
+                if flow_kind and flow_label:
+                    self.state.analyzer.add_flow(
+                        self.state.package_path,
+                        self.state.owner,
+                        self.state.rel_path,
+                        node.lineno,
+                        node.col_offset + 1,
+                        f"{flow_kind}_to_return",
+                        source_kind=flow_kind,
+                        source_label=flow_label,
+                        target_kind="return",
+                        target_label="return",
+                    )
         self.generic_visit(node)
 
 

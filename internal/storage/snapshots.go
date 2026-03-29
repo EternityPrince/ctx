@@ -484,7 +484,7 @@ func deleteSnapshotsTx(tx *sql.Tx, ids []int64, allowDeleteCurrent bool) (int, e
 	}
 	slices.Sort(normalized)
 
-	tables := []string{"packages", "files", "symbols", "package_deps", "refs", "call_edges", "tests", "test_links", "change_cache", "snapshots"}
+	tables := []string{"packages", "files", "symbols", "package_deps", "refs", "call_edges", "flow_edges", "tests", "test_links", "change_cache", "snapshots"}
 	removed := 0
 	for _, id := range normalized {
 		exists, err := snapshotExistsTx(tx, id)
@@ -677,6 +677,9 @@ func (s *Store) CommitSnapshotWithTelemetry(kind, note string, scanned []codebas
 		return SnapshotInfo{}, err
 	}
 	if err := insertCalls(tx, snapshotID, result.Calls); err != nil {
+		return SnapshotInfo{}, err
+	}
+	if err := insertFlows(tx, snapshotID, result.Flows); err != nil {
 		return SnapshotInfo{}, err
 	}
 	if err := insertTests(tx, snapshotID, result.Tests); err != nil {

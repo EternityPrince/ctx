@@ -32,6 +32,12 @@ func Run(command cli.Command, stdout io.Writer) error {
 		return runSymbol(command, stdout)
 	case "impact":
 		return runImpact(command, stdout)
+	case "trace":
+		return runTrace(command, stdout)
+	case "handoff":
+		return runHandoff(command, stdout)
+	case "review":
+		return runReview(command, stdout)
 	case "history":
 		return runHistory(command, stdout)
 	case "cochange":

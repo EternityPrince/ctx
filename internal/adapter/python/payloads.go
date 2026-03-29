@@ -23,6 +23,7 @@ type analyzerOutput struct {
 	Dependencies     []codebase.DependencyFact `json:"dependencies"`
 	References       []codebase.ReferenceFact  `json:"references"`
 	Calls            []codebase.CallFact       `json:"calls"`
+	Flows            []codebase.FlowFact       `json:"flows"`
 	Tests            []codebase.TestFact       `json:"tests"`
 	TestLinks        []codebase.TestLinkFact   `json:"test_links"`
 	ImpactedPackages []string                  `json:"impacted_packages"`

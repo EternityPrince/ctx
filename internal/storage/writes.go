@@ -135,6 +135,40 @@ func insertCalls(tx *sql.Tx, snapshotID int64, calls []codebase.CallFact) error 
 	return nil
 }
 
+func insertFlows(tx *sql.Tx, snapshotID int64, flows []codebase.FlowFact) error {
+	stmt, err := tx.Prepare(`
+		INSERT OR IGNORE INTO flow_edges (
+			snapshot_id, owner_package_import_path, owner_symbol_key, file_path, line, col, kind,
+			source_kind, source_label, source_symbol_key, target_kind, target_label, target_symbol_key
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare insert flows: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, flow := range flows {
+		if _, err := stmt.Exec(
+			snapshotID,
+			flow.OwnerPackageImportPath,
+			flow.OwnerSymbolKey,
+			flow.FilePath,
+			flow.Line,
+			flow.Column,
+			flow.Kind,
+			flow.SourceKind,
+			flow.SourceLabel,
+			flow.SourceSymbolKey,
+			flow.TargetKind,
+			flow.TargetLabel,
+			flow.TargetSymbolKey,
+		); err != nil {
+			return fmt.Errorf("insert flow %s %s -> %s: %w", flow.OwnerSymbolKey, flow.SourceLabel, flow.TargetLabel, err)
+		}
+	}
+	return nil
+}
+
 func insertTests(tx *sql.Tx, snapshotID int64, tests []codebase.TestFact) error {
 	stmt, err := tx.Prepare(`
 		INSERT OR REPLACE INTO tests (snapshot_id, test_key, package_import_path, file_path, name, kind, line)

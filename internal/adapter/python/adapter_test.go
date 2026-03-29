@@ -304,7 +304,7 @@ func TestAnalyzeSkipsUnparseablePythonFilesInsteadOfAborting(t *testing.T) {
 		"pkg/good.py": `def run() -> int:
     return 1
 `,
-		"pkg/bad.py": "✨\n",
+		"pkg/bad.py":      "✨\n",
 		"app/__init__.py": "",
 		"app/runner.py": `from pkg.good import run
 
@@ -389,6 +389,24 @@ def execute_alias() -> int:
 	assertCallEdge(t, result.Calls, symbolKeys, "app.runner.execute_alias", "pkg.service.run")
 	assertCallDispatch(t, result.Calls, symbolKeys, "app.runner.execute", "pkg.service.run", "dynamic_import")
 	assertCallDispatch(t, result.Calls, symbolKeys, "app.runner.execute_alias", "pkg.service.run", "dynamic_import")
+}
+
+func TestAnalyzeExtractsAnalyzerBackedFlowFacts(t *testing.T) {
+	result, symbolKeys := analyzePythonFixture(t, map[string]string{
+		"pyproject.toml":  "[project]\nname = \"flow-demo\"\n",
+		"pkg/__init__.py": "",
+		"pkg/service.py": `class Service:
+    def normalize(self, value: str) -> str:
+        return value
+
+    def run(self, value: str) -> str:
+        return self.normalize(value)
+`,
+	})
+
+	assertFlow(t, result.Flows, symbolKeys, "pkg.service.Service.run", "receiver_to_call", "Service", "pkg.service.Service.normalize")
+	assertFlow(t, result.Flows, symbolKeys, "pkg.service.Service.run", "param_to_call", "value", "pkg.service.Service.normalize")
+	assertFlow(t, result.Flows, symbolKeys, "pkg.service.Service.run", "call_to_return", "pkg.service.Service.normalize", "return")
 }
 
 func analyzePythonFixture(t *testing.T, files map[string]string) (*codebase.Result, map[string]string) {
@@ -553,4 +571,18 @@ func assertTestLink(t *testing.T, links []codebase.TestLinkFact, symbolKeys map[
 		}
 	}
 	t.Fatalf("expected test link %s -> %s (%s), got %+v", testKey, symbolQName, linkKind, links)
+}
+
+func assertFlow(t *testing.T, flows []codebase.FlowFact, symbolKeys map[string]string, ownerQName, kind, sourceLabel, target string) {
+	t.Helper()
+	ownerKey := symbolKeys[ownerQName]
+	for _, flow := range flows {
+		if flow.OwnerSymbolKey != ownerKey || flow.Kind != kind || flow.SourceLabel != sourceLabel {
+			continue
+		}
+		if flow.TargetSymbolKey == target || flow.TargetLabel == target {
+			return
+		}
+	}
+	t.Fatalf("expected flow %s %s %s -> %s, got %+v", ownerQName, kind, sourceLabel, target, flows)
 }

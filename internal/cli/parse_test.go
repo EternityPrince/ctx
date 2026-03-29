@@ -154,6 +154,32 @@ func TestParseImpactCommand(t *testing.T) {
 	}
 }
 
+func TestParseTraceHandoffAndReviewCommands(t *testing.T) {
+	trace, err := Parse([]string{"trace", "CreateSession", "--depth", "5", "--limit", "7", "--explain", "-ai"})
+	if err != nil {
+		t.Fatalf("Parse trace returned error: %v", err)
+	}
+	if trace.Name != "trace" || trace.Query != "CreateSession" || trace.Depth != 5 || trace.Limit != 7 || !trace.Explain || trace.OutputMode != OutputAI {
+		t.Fatalf("unexpected trace command: %+v", trace)
+	}
+
+	handoff, err := Parse([]string{"handoff", "pkg/service.go", "--file", "--limit", "4", "--explain"})
+	if err != nil {
+		t.Fatalf("Parse handoff returned error: %v", err)
+	}
+	if handoff.Name != "handoff" || handoff.Scope != "file" || handoff.Query != "pkg/service.go" || handoff.Limit != 4 || !handoff.Explain {
+		t.Fatalf("unexpected handoff command: %+v", handoff)
+	}
+
+	review, err := Parse([]string{"review", "snapshot", "--from", "1", "--to", "2", "--limit", "5", "--explain"})
+	if err != nil {
+		t.Fatalf("Parse review returned error: %v", err)
+	}
+	if review.Name != "review" || review.Scope != "snapshot" || review.FromSnapshot != 1 || review.ToSnapshot != 2 || review.Limit != 5 || !review.Explain {
+		t.Fatalf("unexpected review command: %+v", review)
+	}
+}
+
 func TestParseDiffHistoryAndCoChangeExplain(t *testing.T) {
 	diff, err := Parse([]string{"diff", "--from", "1", "--to", "2", "--explain"})
 	if err != nil {
@@ -419,7 +445,7 @@ func TestHelpUsageMentionsPythonAndShellSearchFlow(t *testing.T) {
 
 	text := err.Error()
 	for _, snippet := range []string{
-		"local Go and Python code intelligence",
+		"local Go, Python, and Rust code intelligence",
 		"tree [dirs|hot|next|prev|page <n>|up|root]",
 		"search [symbol|text|regex] <query>",
 		"ctx history <query>",

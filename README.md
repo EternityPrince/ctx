@@ -95,6 +95,8 @@ open 1
 ```bash
 ctx symbol CreateSession
 ctx impact CreateSession
+ctx trace CreateSession
+ctx handoff CreateSession
 ```
 
 You get:
@@ -108,6 +110,12 @@ You get:
 - related symbols
 - tests
 - package context
+
+If you already know you are about to change the code, reach for:
+
+- `ctx trace` to get one ordered reading path through callers, callees, tests, history, and blast radius
+- `ctx handoff` to get a pragmatic edit plan for a symbol, package, or file
+- `ctx review` to summarize risky working-tree or snapshot deltas before you ship
 
 ### 3. Enter exploration mode
 
@@ -205,6 +213,9 @@ Estimate change impact:
 
 ```bash
 ctx impact Parse
+ctx trace Parse
+ctx handoff Parse
+ctx review
 ```
 
 Enter the shell:
@@ -305,6 +316,36 @@ Use `--explain` to see the expansion logic, recent deltas, and blast-radius cave
 ctx impact CreateSession
 ctx impact internal/auth.(*Service).Login --depth 4
 ctx impact internal/auth.(*Service).Login --depth 4 --explain
+```
+
+### `ctx trace`
+
+Build one practical reading path around a symbol: declaration, upstream callers, downstream callees, nearby tests, recent history, and blast radius.
+
+```bash
+ctx trace CreateSession
+ctx trace internal/auth.(*Service).Login --depth 4
+ctx trace internal/auth.(*Service).Login --depth 4 --explain
+```
+
+### `ctx handoff`
+
+Prepare a focused handoff before editing. It can resolve a symbol automatically, or you can force `--package` or `--file`.
+
+```bash
+ctx handoff CreateSession
+ctx handoff internal/auth --package --explain
+ctx handoff internal/app/app.go --file
+```
+
+### `ctx review`
+
+Summarize risky deltas either for the current working tree against the latest snapshot, or between two stored snapshots.
+
+```bash
+ctx review
+ctx review --explain
+ctx review snapshot --from 4 --to 5 --explain
 ```
 
 ### `ctx diff`

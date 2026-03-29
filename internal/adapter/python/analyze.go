@@ -43,6 +43,7 @@ func (a *Adapter) Analyze(info project.Info, scanned map[string]codebase.ScanFil
 	result.Dependencies = output.Dependencies
 	result.References = output.References
 	result.Calls = output.Calls
+	result.Flows = output.Flows
 	result.Tests = output.Tests
 	result.TestLinks = output.TestLinks
 

@@ -16,9 +16,12 @@ import (
 )
 
 type funcRegion struct {
-	Start     token.Pos
-	End       token.Pos
-	SymbolKey string
+	Start         token.Pos
+	End           token.Pos
+	SymbolKey     string
+	ReceiverName  string
+	ReceiverLabel string
+	ParamNames    map[string]struct{}
 }
 
 func (a *Adapter) Analyze(info project.Info, scanned map[string]codebase.ScanFile, patterns []string) (*codebase.Result, error) {
@@ -110,9 +113,10 @@ func (a *Adapter) Analyze(info project.Info, scanned map[string]codebase.ScanFil
 			}
 
 			relFile := toRelPath(info.Root, pkg.CompiledGoFiles[i])
-			refs, calls := extractRelationships(pkg, fileAST, relFile, fileRegions[relFile], info.ModulePath)
+			refs, calls, flows := extractRelationships(pkg, fileAST, relFile, fileRegions[relFile], info.ModulePath)
 			result.References = append(result.References, refs...)
 			result.Calls = append(result.Calls, calls...)
+			result.Flows = append(result.Flows, flows...)
 		}
 	}
 
@@ -224,9 +228,12 @@ func extractSymbolsFromFile(pkg *packages.Package, fileAST *ast.File, relFile st
 			})
 			objectKeys[obj] = symbolKey
 			regions = append(regions, funcRegion{
-				Start:     d.Pos(),
-				End:       d.End(),
-				SymbolKey: symbolKey,
+				Start:         d.Pos(),
+				End:           d.End(),
+				SymbolKey:     symbolKey,
+				ReceiverName:  funcReceiverName(d),
+				ReceiverLabel: receiver,
+				ParamNames:    funcParamNames(d),
 			})
 
 		case *ast.GenDecl:
@@ -267,9 +274,10 @@ func extractSymbolsFromFile(pkg *packages.Package, fileAST *ast.File, relFile st
 	return symbols, regions
 }
 
-func extractRelationships(pkg *packages.Package, fileAST *ast.File, relFile string, regions []funcRegion, modulePath string) ([]codebase.ReferenceFact, []codebase.CallFact) {
+func extractRelationships(pkg *packages.Package, fileAST *ast.File, relFile string, regions []funcRegion, modulePath string) ([]codebase.ReferenceFact, []codebase.CallFact, []codebase.FlowFact) {
 	var refs []codebase.ReferenceFact
 	var calls []codebase.CallFact
+	var flows []codebase.FlowFact
 
 	ast.Inspect(fileAST, func(node ast.Node) bool {
 		switch n := node.(type) {
@@ -296,8 +304,8 @@ func extractRelationships(pkg *packages.Package, fileAST *ast.File, relFile stri
 			})
 
 		case *ast.CallExpr:
-			callerKey := ownerForPos(regions, n.Pos())
-			if callerKey == "" {
+			ownerRegion, ok := regionForPos(regions, n.Pos())
+			if !ok || ownerRegion.SymbolKey == "" {
 				return true
 			}
 
@@ -306,7 +314,7 @@ func extractRelationships(pkg *packages.Package, fileAST *ast.File, relFile stri
 				return true
 			}
 
-			calleeKey, _, kind, _, ok := symbolIdentityFromObject(obj)
+			calleeKey, calleeQName, kind, _, ok := symbolIdentityFromObject(obj)
 			if !ok || !strings.HasPrefix(objectPackagePath(obj), modulePath) {
 				return true
 			}
@@ -317,16 +325,184 @@ func extractRelationships(pkg *packages.Package, fileAST *ast.File, relFile stri
 			pos := pkg.Fset.Position(n.Pos())
 			calls = append(calls, codebase.CallFact{
 				CallerPackageImportPath: pkg.PkgPath,
-				CallerSymbolKey:         callerKey,
+				CallerSymbolKey:         ownerRegion.SymbolKey,
 				CalleeSymbolKey:         calleeKey,
 				FilePath:                relFile,
 				Line:                    pos.Line,
 				Column:                  pos.Column,
 				Dispatch:                callDispatch(pkg.TypesInfo, n.Fun),
 			})
+			flows = append(flows, goCallFlowFacts(pkg.PkgPath, ownerRegion, relFile, pos.Line, pos.Column, n, calleeKey, calleeQName)...)
+
+		case *ast.ReturnStmt:
+			ownerRegion, ok := regionForPos(regions, n.Pos())
+			if !ok || ownerRegion.SymbolKey == "" {
+				return true
+			}
+			flows = append(flows, goReturnFlowFacts(pkg, ownerRegion, relFile, n, modulePath)...)
 		}
 		return true
 	})
 
-	return refs, calls
+	return refs, calls, flows
+}
+
+func funcReceiverName(decl *ast.FuncDecl) string {
+	if decl == nil || decl.Recv == nil || len(decl.Recv.List) == 0 {
+		return ""
+	}
+	for _, field := range decl.Recv.List {
+		for _, name := range field.Names {
+			if name != nil && strings.TrimSpace(name.Name) != "" {
+				return name.Name
+			}
+		}
+	}
+	return ""
+}
+
+func funcParamNames(decl *ast.FuncDecl) map[string]struct{} {
+	params := make(map[string]struct{})
+	if decl == nil || decl.Type == nil || decl.Type.Params == nil {
+		return params
+	}
+	for _, field := range decl.Type.Params.List {
+		for _, name := range field.Names {
+			if name == nil {
+				continue
+			}
+			if value := strings.TrimSpace(name.Name); value != "" {
+				params[value] = struct{}{}
+			}
+		}
+	}
+	return params
+}
+
+func regionForPos(regions []funcRegion, pos token.Pos) (funcRegion, bool) {
+	for _, region := range regions {
+		if pos >= region.Start && pos <= region.End {
+			return region, true
+		}
+	}
+	return funcRegion{}, false
+}
+
+func flowSourceForExpr(expr ast.Expr, region funcRegion) (string, string) {
+	switch value := expr.(type) {
+	case *ast.ParenExpr:
+		return flowSourceForExpr(value.X, region)
+	case *ast.StarExpr:
+		return flowSourceForExpr(value.X, region)
+	case *ast.UnaryExpr:
+		return flowSourceForExpr(value.X, region)
+	case *ast.Ident:
+		if region.ReceiverName != "" && value.Name == region.ReceiverName {
+			return "receiver", receiverFlowLabel(region)
+		}
+		if _, ok := region.ParamNames[value.Name]; ok {
+			return "param", value.Name
+		}
+	case *ast.SelectorExpr:
+		if ident, ok := value.X.(*ast.Ident); ok {
+			if region.ReceiverName != "" && ident.Name == region.ReceiverName {
+				return "receiver", receiverFlowLabel(region)
+			}
+			if _, ok := region.ParamNames[ident.Name]; ok {
+				return "param", ident.Name
+			}
+		}
+	}
+	return "", ""
+}
+
+func receiverFlowLabel(region funcRegion) string {
+	if strings.TrimSpace(region.ReceiverLabel) != "" {
+		return region.ReceiverLabel
+	}
+	return "receiver"
+}
+
+func goCallFlowFacts(pkgPath string, region funcRegion, relFile string, line, column int, call *ast.CallExpr, calleeKey, calleeQName string) []codebase.FlowFact {
+	flows := make([]codebase.FlowFact, 0, len(call.Args)+1)
+	if sourceKind, sourceLabel := flowSourceForExpr(call.Fun, region); sourceKind == "receiver" {
+		flows = append(flows, codebase.FlowFact{
+			OwnerPackageImportPath: pkgPath,
+			OwnerSymbolKey:         region.SymbolKey,
+			FilePath:               relFile,
+			Line:                   line,
+			Column:                 column,
+			Kind:                   "receiver_to_call",
+			SourceKind:             sourceKind,
+			SourceLabel:            sourceLabel,
+			TargetKind:             "call",
+			TargetLabel:            calleeQName,
+			TargetSymbolKey:        calleeKey,
+		})
+	}
+	for _, arg := range call.Args {
+		sourceKind, sourceLabel := flowSourceForExpr(arg, region)
+		if sourceKind == "" || sourceLabel == "" {
+			continue
+		}
+		flows = append(flows, codebase.FlowFact{
+			OwnerPackageImportPath: pkgPath,
+			OwnerSymbolKey:         region.SymbolKey,
+			FilePath:               relFile,
+			Line:                   line,
+			Column:                 column,
+			Kind:                   sourceKind + "_to_call",
+			SourceKind:             sourceKind,
+			SourceLabel:            sourceLabel,
+			TargetKind:             "call",
+			TargetLabel:            calleeQName,
+			TargetSymbolKey:        calleeKey,
+		})
+	}
+	return flows
+}
+
+func goReturnFlowFacts(pkg *packages.Package, region funcRegion, relFile string, stmt *ast.ReturnStmt, modulePath string) []codebase.FlowFact {
+	flows := make([]codebase.FlowFact, 0, len(stmt.Results))
+	for _, result := range stmt.Results {
+		pos := pkg.Fset.Position(result.Pos())
+		if callExpr, ok := result.(*ast.CallExpr); ok {
+			obj := calledObject(pkg.TypesInfo, callExpr.Fun)
+			calleeKey, calleeQName, kind, _, ok := symbolIdentityFromObject(obj)
+			if ok && strings.HasPrefix(objectPackagePath(obj), modulePath) && (kind == "func" || kind == "method") {
+				flows = append(flows, codebase.FlowFact{
+					OwnerPackageImportPath: pkg.PkgPath,
+					OwnerSymbolKey:         region.SymbolKey,
+					FilePath:               relFile,
+					Line:                   pos.Line,
+					Column:                 pos.Column,
+					Kind:                   "call_to_return",
+					SourceKind:             "call",
+					SourceLabel:            calleeQName,
+					SourceSymbolKey:        calleeKey,
+					TargetKind:             "return",
+					TargetLabel:            "return",
+				})
+				continue
+			}
+		}
+
+		sourceKind, sourceLabel := flowSourceForExpr(result, region)
+		if sourceKind == "" || sourceLabel == "" {
+			continue
+		}
+		flows = append(flows, codebase.FlowFact{
+			OwnerPackageImportPath: pkg.PkgPath,
+			OwnerSymbolKey:         region.SymbolKey,
+			FilePath:               relFile,
+			Line:                   pos.Line,
+			Column:                 pos.Column,
+			Kind:                   sourceKind + "_to_return",
+			SourceKind:             sourceKind,
+			SourceLabel:            sourceLabel,
+			TargetKind:             "return",
+			TargetLabel:            "return",
+		})
+	}
+	return flows
 }

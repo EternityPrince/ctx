@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const sqliteSchemaVersion = 5
+const sqliteSchemaVersion = 6
 
 type SnapshotCommitTelemetry struct {
 	ScannedFiles     int

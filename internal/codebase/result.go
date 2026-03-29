@@ -24,6 +24,7 @@ func MergeResult(dst, src *Result) {
 	dst.Dependencies = append(dst.Dependencies, src.Dependencies...)
 	dst.References = append(dst.References, src.References...)
 	dst.Calls = append(dst.Calls, src.Calls...)
+	dst.Flows = append(dst.Flows, src.Flows...)
 	dst.Tests = append(dst.Tests, src.Tests...)
 	dst.TestLinks = append(dst.TestLinks, src.TestLinks...)
 	for pkg := range src.ImpactedPackage {
@@ -65,6 +66,27 @@ func SortResult(result *Result) {
 			return result.Calls[i].CalleeSymbolKey < result.Calls[j].CalleeSymbolKey
 		}
 		return result.Calls[i].CallerSymbolKey < result.Calls[j].CallerSymbolKey
+	})
+	sort.Slice(result.Flows, func(i, j int) bool {
+		if result.Flows[i].OwnerSymbolKey == result.Flows[j].OwnerSymbolKey {
+			if result.Flows[i].FilePath == result.Flows[j].FilePath {
+				if result.Flows[i].Line == result.Flows[j].Line {
+					if result.Flows[i].Column == result.Flows[j].Column {
+						if result.Flows[i].Kind == result.Flows[j].Kind {
+							if result.Flows[i].SourceLabel == result.Flows[j].SourceLabel {
+								return result.Flows[i].TargetLabel < result.Flows[j].TargetLabel
+							}
+							return result.Flows[i].SourceLabel < result.Flows[j].SourceLabel
+						}
+						return result.Flows[i].Kind < result.Flows[j].Kind
+					}
+					return result.Flows[i].Column < result.Flows[j].Column
+				}
+				return result.Flows[i].Line < result.Flows[j].Line
+			}
+			return result.Flows[i].FilePath < result.Flows[j].FilePath
+		}
+		return result.Flows[i].OwnerSymbolKey < result.Flows[j].OwnerSymbolKey
 	})
 	sort.Slice(result.Tests, func(i, j int) bool {
 		return result.Tests[i].TestKey < result.Tests[j].TestKey

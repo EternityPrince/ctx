@@ -55,12 +55,14 @@ class PythonAnalyzer:
         self.dependencies = []
         self.references = []
         self.calls = []
+        self.flows = []
         self.tests = []
         self.test_links = []
 
         self._dep_seen = set()
         self._ref_seen = set()
         self._call_seen = set()
+        self._flow_seen = set()
         self._test_link_seen = set()
 
     def run(self):
@@ -89,6 +91,7 @@ class PythonAnalyzer:
             "dependencies": self.dependencies,
             "references": self.references,
             "calls": self.calls,
+            "flows": self.flows,
             "tests": self.tests,
             "test_links": self.test_links,
             "impacted_packages": impacted,
@@ -753,6 +756,56 @@ class PythonAnalyzer:
                 "Line": line,
                 "Column": column,
                 "Dispatch": dispatch or ("dynamic" if target["Kind"] == "method" else "static"),
+            }
+        )
+
+    def add_flow(
+        self,
+        package_path,
+        owner,
+        rel_path,
+        line,
+        column,
+        kind,
+        source_kind="",
+        source_label="",
+        target_kind="",
+        target_label="",
+        source_symbol=None,
+        target_symbol=None,
+    ):
+        if not owner or not kind:
+            return
+        key = (
+            owner["SymbolKey"],
+            rel_path,
+            line,
+            column,
+            kind,
+            source_kind,
+            source_label,
+            (source_symbol or {}).get("SymbolKey", ""),
+            target_kind,
+            target_label,
+            (target_symbol or {}).get("SymbolKey", ""),
+        )
+        if key in self._flow_seen:
+            return
+        self._flow_seen.add(key)
+        self.flows.append(
+            {
+                "OwnerPackageImportPath": package_path,
+                "OwnerSymbolKey": owner["SymbolKey"],
+                "FilePath": rel_path,
+                "Line": line,
+                "Column": column,
+                "Kind": kind,
+                "SourceKind": source_kind,
+                "SourceLabel": source_label,
+                "SourceSymbolKey": (source_symbol or {}).get("SymbolKey", ""),
+                "TargetKind": target_kind,
+                "TargetLabel": target_label,
+                "TargetSymbolKey": (target_symbol or {}).get("SymbolKey", ""),
             }
         )
 

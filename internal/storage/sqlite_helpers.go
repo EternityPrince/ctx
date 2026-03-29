@@ -106,6 +106,8 @@ func forwardColumns(table string) string {
 		return `from_package_import_path, from_symbol_key, to_symbol_key, file_path, line, col, kind`
 	case "call_edges":
 		return `caller_package_import_path, caller_symbol_key, callee_symbol_key, file_path, line, col, dispatch`
+	case "flow_edges":
+		return `owner_package_import_path, owner_symbol_key, file_path, line, col, kind, source_kind, source_label, source_symbol_key, target_kind, target_label, target_symbol_key`
 	case "tests":
 		return `test_key, package_import_path, file_path, name, kind, line`
 	case "test_links":
@@ -277,6 +279,29 @@ func describeReferenceKind(kind string) string {
 		return "reference in indexed source"
 	default:
 		return kind + " reference in indexed source"
+	}
+}
+
+func describeFlowKind(kind string) string {
+	switch kind {
+	case "param_to_call":
+		return "parameter-to-call flow captured by the analyzer"
+	case "receiver_to_call":
+		return "receiver-to-call flow captured by the analyzer"
+	case "call_to_return":
+		return "returned call result captured by the analyzer"
+	case "param_to_return":
+		return "parameter-to-return flow captured by the analyzer"
+	case "receiver_to_return":
+		return "receiver-to-return flow captured by the analyzer"
+	case "receiver_to_state":
+		return "receiver state touch captured by the analyzer"
+	case "param_to_state":
+		return "parameter state touch captured by the analyzer"
+	case "":
+		return "flow edge captured by the analyzer"
+	default:
+		return kind + " flow captured by the analyzer"
 	}
 }
 

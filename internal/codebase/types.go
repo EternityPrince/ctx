@@ -222,6 +222,7 @@ type Result struct {
 	Dependencies    []DependencyFact
 	References      []ReferenceFact
 	Calls           []CallFact
+	Flows           []FlowFact
 	Tests           []TestFact
 	TestLinks       []TestLinkFact
 }
@@ -281,6 +282,21 @@ type CallFact struct {
 	Line                    int
 	Column                  int
 	Dispatch                string
+}
+
+type FlowFact struct {
+	OwnerPackageImportPath string
+	OwnerSymbolKey         string
+	FilePath               string
+	Line                   int
+	Column                 int
+	Kind                   string
+	SourceKind             string
+	SourceLabel            string
+	SourceSymbolKey        string
+	TargetKind             string
+	TargetLabel            string
+	TargetSymbolKey        string
 }
 
 type TestFact struct {

@@ -227,6 +227,9 @@ func (s *Store) LoadSymbolView(symbolKey string) (SymbolView, error) {
 	if view.ReferencesOut, err = s.loadReferences(current.ID, symbolKey, false); err != nil {
 		return SymbolView{}, err
 	}
+	if view.Flow, err = s.loadFlow(current.ID, symbolKey); err != nil {
+		return SymbolView{}, err
+	}
 	if view.Tests, err = s.loadTests(current.ID, symbolKey); err != nil {
 		return SymbolView{}, err
 	}
@@ -839,6 +842,60 @@ func (s *Store) loadReferences(snapshotID int64, symbolKey string, inbound bool)
 		return nil, fmt.Errorf("iterate refs: %w", err)
 	}
 	return refs, nil
+}
+
+func (s *Store) loadFlow(snapshotID int64, symbolKey string) ([]FlowEdgeView, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			f.kind,
+			f.source_kind,
+			f.source_label,
+			f.source_symbol_key,
+			COALESCE(src.qname, ''),
+			f.target_kind,
+			f.target_label,
+			f.target_symbol_key,
+			COALESCE(dst.qname, ''),
+			f.file_path,
+			f.line,
+			f.col
+		FROM flow_edges f
+		LEFT JOIN symbols src ON src.snapshot_id = f.snapshot_id AND src.symbol_key = f.source_symbol_key
+		LEFT JOIN symbols dst ON dst.snapshot_id = f.snapshot_id AND dst.symbol_key = f.target_symbol_key
+		WHERE f.snapshot_id = ? AND f.owner_symbol_key = ?
+		ORDER BY f.line, f.col, f.kind, f.source_label, f.target_label, f.target_symbol_key
+	`, snapshotID, symbolKey)
+	if err != nil {
+		return nil, fmt.Errorf("query flow edges: %w", err)
+	}
+	defer rows.Close()
+
+	var items []FlowEdgeView
+	for rows.Next() {
+		var item FlowEdgeView
+		if err := rows.Scan(
+			&item.Kind,
+			&item.SourceKind,
+			&item.SourceLabel,
+			&item.SourceSymbolKey,
+			&item.SourceQName,
+			&item.TargetKind,
+			&item.TargetLabel,
+			&item.TargetSymbolKey,
+			&item.TargetQName,
+			&item.UseFilePath,
+			&item.UseLine,
+			&item.UseColumn,
+		); err != nil {
+			return nil, fmt.Errorf("scan flow edge: %w", err)
+		}
+		item.Why = describeFlowKind(item.Kind)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate flow edges: %w", err)
+	}
+	return items, nil
 }
 
 func (s *Store) loadTests(snapshotID int64, symbolKey string) ([]TestView, error) {
